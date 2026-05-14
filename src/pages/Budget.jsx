@@ -161,8 +161,9 @@ const Budget = () => {
       };
       
       console.log('Sending payload:', payload);
-      
-      const response = await axios.post(`http://localhost:8080/api/budget/1`, payload);
+
+      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      const response = await axios.post(`${backendUrl}/api/budget/1`, payload);
       console.log('Post response:', response.data);
       
       await fetchBudgets();

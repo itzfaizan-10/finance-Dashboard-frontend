@@ -19,13 +19,14 @@ const Dashboard = () => {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
   // Fetch dashboard data from backend
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
       const userId = 1; // Replace with actual logged-in user ID
-      const response = await axios.get(`http://localhost:8080/api/dashboard/${userId}`);
+      const response = await axios.get(`${backendUrl}/api/dashboard/${userId}`);
       console.log('Dashboard data:', response.data);
       
       setDashboardData({

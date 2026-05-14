@@ -34,7 +34,9 @@ const Transactions = () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await axios.get('http://localhost:8080/api/transaction/users/1');
+      const userId = 1; 
+     const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      const response = await axios.get(`${backendUrl}/api/transaction/users/${userId}`);
       console.log('Fetched transactions:', response.data);
       
       let transactionsData = [];
@@ -84,7 +86,8 @@ const Transactions = () => {
       
       console.log('Sending payload with categoryId:', payload);
       
-      const response = await axios.post('http://localhost:8080/api/transaction/1', payload);
+      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      const response = await axios.post(`${backendUrl}/api/transaction/1`, payload);
       console.log('Transaction saved:', response.data);
       
       await fetchTransactions();
