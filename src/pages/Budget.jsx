@@ -20,7 +20,6 @@ const Budget = () => {
     categoryId: '',
     limitAmount: ''
   });
-   const backendUrl = import.meta.env.VITE_BACKEND_URL;
    
 
   // Categories mapping with proper names
@@ -54,9 +53,12 @@ const Budget = () => {
     setLoading(true);
     
     try {
-      if (!backendUrl) {
-  console.error("❌ VITE_BACKEND_URL is not defined");
-}
+         const backendUrl = import.meta.env.VITE_BACKEND_URL;
+
+  if (!backendUrl) {
+      console.error("❌ Missing backend URL");
+      return;
+    }
       const res = await axios.get(`${backendUrl}/api/budget/1`);
       console.log('=== FULL RESPONSE ===', res.data);
       
@@ -168,7 +170,7 @@ const Budget = () => {
       
       console.log('Sending payload:', payload);
 
-     
+        const backendUrl = import.meta.env.VITE_BACKEND_URL;
       const response = await axios.post(`${backendUrl}/api/budget/1`, payload);
       setTimeout(() => {
   fetchBudgets();
