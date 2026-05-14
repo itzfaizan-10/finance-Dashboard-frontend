@@ -21,6 +21,7 @@ const Budget = () => {
     limitAmount: ''
   });
    const backendUrl = import.meta.env.VITE_BACKEND_URL;
+   
 
   // Categories mapping with proper names
   const fetchCategories = async () => {
@@ -51,7 +52,11 @@ const Budget = () => {
 
   const fetchBudgets = async () => {
     setLoading(true);
+    
     try {
+      if (!backendUrl) {
+  console.error("❌ VITE_BACKEND_URL is not defined");
+}
       const res = await axios.get(`${backendUrl}/api/budget/1`);
       console.log('=== FULL RESPONSE ===', res.data);
       
@@ -100,7 +105,7 @@ const Budget = () => {
       });
       
       console.log('Budgets with names:', budgetsWithCategoryName);
-      setBudgets(budgetsWithCategoryName);
+      setBudgets(Array.isArray(budgetsWithCategoryName) ? budgetsWithCategoryName : []);
       
       // Use summary from backend if available
       if (summaryData) {
@@ -165,6 +170,9 @@ const Budget = () => {
 
      
       const response = await axios.post(`${backendUrl}/api/budget/1`, payload);
+      setTimeout(() => {
+  fetchBudgets();
+}, 300);
       console.log('Post response:', response.data);
       
       await fetchBudgets();
@@ -255,7 +263,7 @@ const Budget = () => {
 
         <h3 className="text-2xl font-bold text-emerald-600 mb-6">Category Breakdown</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {budgets.map((budget) => (
+          {Array.isArray(budgets) && budgets.map((budget) => (
             <BudgetCard 
               key={budget.id} 
               budget={{
