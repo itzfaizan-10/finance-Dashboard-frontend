@@ -24,9 +24,19 @@ const Dashboard = () => {
   // Fetch dashboard data from backend
   const fetchDashboardData = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const userId = 1; // Replace with actual logged-in user ID
-      const response = await axios.get(`${backendUrl}/api/dashboard/${userId}`);
+        const token = localStorage.getItem("token");
+
+        if(!token){
+             setError("User not authenticated. Please login again.");
+             setLoading(false); 
+             return;}
+      
+      const response = await axios.get(`${backendUrl}/api/dashboard`{
+        headers:{
+          Authorization: `Bearer ${token}`,},
+      });
       console.log('Dashboard data:', response.data);
       
       setDashboardData({
