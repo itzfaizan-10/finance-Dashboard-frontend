@@ -33,7 +33,7 @@ const Dashboard = () => {
              setLoading(false); 
              return;}
       
-      const response = await axios.get(`${backendUrl}/api/dashboard`{
+      const response = await axios.get(`${backendUrl}/api/dashboard`,{
         headers:{
           Authorization: `Bearer ${token}`,},
       });

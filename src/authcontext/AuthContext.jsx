@@ -1,4 +1,5 @@
 import axios from 'axios';
+// import { useNavigate } from "react-router-dom";
 import React, { createContext, useState, useContext, useEffect } from 'react';
 
 export const AuthContext = createContext(null);
@@ -11,9 +12,7 @@ export const useAuth = () => {
 
 export const AuthProvider = ({ children }) => {
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL;
-  
-  console.log("backend url => ", backendUrl)
+ 
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -21,9 +20,12 @@ export const AuthProvider = ({ children }) => {
   // ✅ Handle Google OAuth redirect when component mounts
   useEffect(() => {
     const handleOAuthRedirect = async () => {
+       const backendUrl = import.meta.env.VITE_BACKEND_URL;
+       console.log("backend url => ", backendUrl);
       // Get the current URL
       const urlParams = new URLSearchParams(window.location.search);
       const token = urlParams.get('token');
+      console.log("raw token from URL:", token);
       const error = urlParams.get('error');
       
       console.log("Checking OAuth redirect...");
@@ -42,6 +44,7 @@ export const AuthProvider = ({ children }) => {
       
       // If there's a token from Google OAuth
       if (token) {
+          
         console.log("✅ Token found in URL, processing OAuth login...");
         
         try {
@@ -75,8 +78,9 @@ export const AuthProvider = ({ children }) => {
           localStorage.setItem('user', JSON.stringify(userData));
           
           // Clean URL and redirect to dashboard
-          window.history.replaceState({}, document.title, window.location.pathname);
-          window.location.href = '/';
+          setLoading(false);
+       setTimeout(() => { window.location.href = "/dashboard"; }, 100);
+          
           
         } catch (err) {
           console.error("Error processing OAuth token:", err);
@@ -169,12 +173,12 @@ export const AuthProvider = ({ children }) => {
           userId: userId
         };
         
-        setUser(userData);
-        localStorage.setItem('user', JSON.stringify(userData));
-        localStorage.setItem('token', token);
-        
         // ✅ REDIRECT TO DASHBOARD AFTER LOGIN
-        window.location.href = '/';
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(userData));
+        setUser(userData);
+        setLoading(false);
+        window.history.replaceState({}, document.title, "/");
         
         return { success: true, message: "Login successfully" };
       } else {
@@ -228,10 +232,9 @@ export const AuthProvider = ({ children }) => {
         setUser(userData);
         localStorage.setItem('user', JSON.stringify(userData));
         localStorage.setItem('token', token);
-        
-        // ✅ REDIRECT TO DASHBOARD AFTER REGISTRATION
-        window.location.href = '/';
-        
+        setLoading(false);
+        window.history.replaceState({}, document.title, "/dashboard");
+
         return { success: true, message: "Registration successful" };
       } else {
         return { success: false, message: "Registration failed" };

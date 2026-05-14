@@ -20,6 +20,7 @@ const Budget = () => {
     categoryId: '',
     limitAmount: ''
   });
+   const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
   // Categories mapping with proper names
   const fetchCategories = async () => {
@@ -51,7 +52,7 @@ const Budget = () => {
   const fetchBudgets = async () => {
     setLoading(true);
     try {
-      const res = await axios.get('/api/budget/1');
+      const res = await axios.get(`${backendUrl}/api/budget/1`);
       console.log('=== FULL RESPONSE ===', res.data);
       
       let budgetsData = [];
@@ -162,7 +163,7 @@ const Budget = () => {
       
       console.log('Sending payload:', payload);
 
-      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+     
       const response = await axios.post(`${backendUrl}/api/budget/1`, payload);
       console.log('Post response:', response.data);
       
