@@ -1,5 +1,5 @@
 // src/pages/Dashboard.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/layout/Layout';
 import SummaryCard from '../components/SummaryCard';
 import TransactionRow from '../components/TransactionRow';
@@ -21,65 +21,145 @@ const Dashboard = () => {
   const [error, setError] = useState(null);
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
-  // Fetch dashboard data from backend
-  const fetchDashboardData = async () => {
+  // ✅ Wrap fetchDashboardData in useCallback to prevent infinite loops
+  const fetchDashboardData = useCallback(async () => {
     setLoading(true);
     setError(null);
+    
     try {
-        const token = localStorage.getItem("token");
+      const token = localStorage.getItem("token");
 
-        if(!token){
-             setError("User not authenticated. Please login again.");
-             setLoading(false); 
-             return;}
+      if (!token) {
+        console.error("No authentication token found");
+        setError("User not authenticated. Please login again.");
+        setLoading(false);
+        
+        // ✅ Optionally redirect to login after a delay
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 2000);
+        
+        return;
+      }
       
-      const response = await axios.get(`${backendUrl}/api/dashboard`,{
-        headers:{
-          Authorization: `Bearer ${token}`,},
+      if (!backendUrl) {
+        console.error("Backend URL not configured");
+        setError("Backend URL is not configured. Please check environment variables.");
+        setLoading(false);
+        return;
+      }
+      
+      const response = await axios.get(`${backendUrl}/api/dashboard`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
+      
       console.log('Dashboard data:', response.data);
       
+      // ✅ Safely extract data with fallbacks
+      const data = response.data || {};
+      
       setDashboardData({
-        totalBalance: response.data.totalBalance || 0,
-        totalIncome: response.data.totalIncome || 0,
-        totalExpense: response.data.totalExpense || 0,
-        monthlyChange: response.data.monthlyChange || 0,
-        recentTransactions: response.data.recentTransactions || [],
-        categoryBreakdown: response.data.categoryBreakdown || {}
+        totalBalance: typeof data.totalBalance === 'number' ? data.totalBalance : 0,
+        totalIncome: typeof data.totalIncome === 'number' ? data.totalIncome : 0,
+        totalExpense: typeof data.totalExpense === 'number' ? data.totalExpense : 0,
+        monthlyChange: typeof data.monthlyChange === 'number' ? data.monthlyChange : 0,
+        recentTransactions: Array.isArray(data.recentTransactions) ? data.recentTransactions : [],
+        categoryBreakdown: data.categoryBreakdown && typeof data.categoryBreakdown === 'object' ? data.categoryBreakdown : {}
       });
+      
     } catch (err) {
       console.error('Error fetching dashboard:', err);
-      setError('Failed to load dashboard data');
+      
+      // ✅ Handle different error types
+      if (err.response) {
+        // Server responded with error status
+        if (err.response.status === 401) {
+          setError('Session expired. Please login again.');
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          setTimeout(() => {
+            window.location.href = '/login';
+          }, 2000);
+        } else {
+          setError(err.response.data?.message || 'Failed to load dashboard data');
+        }
+      } else if (err.request) {
+        // Request was made but no response
+        setError('Unable to connect to server. Please check your internet connection.');
+      } else {
+        // Something else happened
+        setError('An unexpected error occurred. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, [backendUrl]); // ✅ Add backendUrl as dependency
 
   useEffect(() => {
     fetchDashboardData();
-  }, []);
+  }, [fetchDashboardData]); // ✅ Add fetchDashboardData as dependency
 
-  // Get user's display name
-  const getDisplayName = () => {
-    if (!user) return 'Guest';
-    return user?.name || user?.username || user?.email?.split('@')[0] || 'User';
+  // ✅ Safe user display name extraction
+  const getDisplayName = useCallback(() => {
+    try {
+      if (!user) return 'Guest';
+      
+      // ✅ Check if user is an object
+      if (typeof user !== 'object') return 'User';
+      
+      // ✅ Safely extract name with fallbacks
+      const name = user?.name || 
+                   user?.username || 
+                   (user?.email ? user.email.split('@')[0] : null) || 
+                   'User';
+      
+      // ✅ Ensure we return a string
+      return String(name);
+    } catch (err) {
+      console.error('Error getting display name:', err);
+      return 'User';
+    }
+  }, [user]);
+
+  // ✅ Safe monthly change display
+  const getMonthlyChangeDisplay = () => {
+    const change = dashboardData.monthlyChange;
+    if (typeof change !== 'number') return '0.0';
+    return change.toFixed(1);
   };
 
+  // ✅ Loading state
   if (loading) {
     return (
       <Layout>
         <div className="p-8 pt-24 flex justify-center items-center min-h-screen">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600"></div>
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto"></div>
+            <p className="mt-4 text-gray-500">Loading your dashboard...</p>
+          </div>
         </div>
       </Layout>
     );
   }
 
+  // ✅ Error state
   if (error) {
     return (
       <Layout>
-        <div className="p-8 pt-24">
-          <div className="bg-red-50 text-red-600 p-4 rounded-lg">{error}</div>
+        <div className="p-8 pt-24 min-h-screen">
+          <div className="bg-red-50 border border-red-200 text-red-600 p-6 rounded-lg max-w-md mx-auto text-center">
+            <div className="text-red-500 text-4xl mb-4">⚠️</div>
+            <h3 className="font-bold text-lg mb-2">Error Loading Dashboard</h3>
+            <p className="text-sm mb-4">{error}</p>
+            <button 
+              onClick={fetchDashboardData}
+              className="mt-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+            >
+              Try Again
+            </button>
+          </div>
         </div>
       </Layout>
     );
@@ -93,7 +173,7 @@ const Dashboard = () => {
         <div className="mb-8">
           <h1 className="text-3xl font-extrabold text-black">Financial Overview</h1>
           <p className="text-gray-500 mt-2">
-            Welcome back, {getDisplayName()}. Your curated portfolio is up {dashboardData.monthlyChange || 4.2}% this week.
+            Welcome back, {getDisplayName()}. Your curated portfolio is up {getMonthlyChangeDisplay()}% this week.
           </p>
         </div>
 
@@ -109,11 +189,11 @@ const Dashboard = () => {
                 <p className="text-xs font-semibold text-green-600 uppercase tracking-wider">REMAINING BALANCE</p>
               </div>
               <div className="flex items-center gap-1 text-green-600 text-sm font-medium">
-                <TrendingUp size={14} /> {dashboardData.monthlyChange}%
+                <TrendingUp size={14} /> {getMonthlyChangeDisplay()}%
               </div>
             </div>
             <p className="text-3xl font-bold text-green-700 mb-2">
-              ${dashboardData.totalBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${(dashboardData.totalBalance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
             <p className="text-xs text-green-500">Available to spend</p>
           </div>
@@ -129,7 +209,7 @@ const Dashboard = () => {
               </div>
             </div>
             <p className="text-3xl font-bold text-gray-900 mb-2">
-              ${dashboardData.totalIncome.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${(dashboardData.totalIncome || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
             <p className="text-xs text-emerald-600">+2.4% vs last month</p>
           </div>
@@ -145,7 +225,7 @@ const Dashboard = () => {
               </div>
             </div>
             <p className="text-3xl font-bold text-gray-900 mb-2">
-              ${dashboardData.totalExpense.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${(dashboardData.totalExpense || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
             <p className="text-xs text-gray-400">Total expenses this month</p>
           </div>
@@ -179,7 +259,7 @@ const Dashboard = () => {
               <tbody className="divide-y divide-gray-100">
                 {dashboardData.recentTransactions.length > 0 ? (
                   dashboardData.recentTransactions.map((tx) => (
-                    <TransactionRow key={tx.id} transaction={tx} compact={false} />
+                    <TransactionRow key={tx.id || Math.random()} transaction={tx} compact={false} />
                   ))
                 ) : (
                   <tr>

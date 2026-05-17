@@ -1,10 +1,11 @@
 // src/pages/Transactions.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/layout/Layout';
 import TransactionRow from '../components/TransactionRow';
 import TransactionForm from '../components/TransactionForm';
-import { Download, Plus, Calendar, Filter, ChevronLeft, ChevronRight, TrendingUp } from 'lucide-react';
+import { Download, Plus, Calendar, Filter, ChevronLeft, ChevronRight, TrendingUp, AlertCircle } from 'lucide-react';
 import axios from 'axios';
+import { useAuth } from '../authcontext/AuthContext';
 
 // ✅ Category to ID mapping (must match backend)
 const CATEGORY_TO_ID = {
@@ -20,112 +21,333 @@ const CATEGORY_TO_ID = {
   'Rent': 10
 };
 
+// ✅ Reverse mapping for ID to category
+const ID_TO_CATEGORY = {
+  1: 'Dinner',
+  2: 'Driving',
+  3: 'Shopping',
+  4: 'Entertainment',
+  5: 'Utilities',
+  6: 'Groceries',
+  7: 'Transportation',
+  8: 'Healthcare',
+  9: 'Education',
+  10: 'Rent'
+};
+
 const Transactions = () => {
+  const { user } = useAuth(); // ✅ Get user from auth
   const [transactions, setTransactions] = useState([]);
   const [filterType, setFilterType] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [dateRange, setDateRange] = useState('last30');
   const itemsPerPage = 8;
 
-  // Fetch transactions from backend
-  const fetchTransactions = async () => {
+  // ✅ Get userId from user object or localStorage
+  const getUserId = useCallback(() => {
+    if (user?.userId) return user.userId;
+    if (user?.id) return user.id;
+    
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        return parsedUser.userId || parsedUser.id || 1;
+      } catch (err) {
+        console.error('Error parsing stored user:', err);
+      }
+    }
+    return 1; // Fallback, but should be dynamic
+  }, [user]);
+
+  // ✅ Fetch transactions with authentication
+  const fetchTransactions = useCallback(async () => {
     setLoading(true);
     setError(null);
+    
     try {
-      const userId = 1; 
-     const backendUrl = import.meta.env.VITE_BACKEND_URL;
-      const response = await axios.get(`${backendUrl}/api/transaction/users/${userId}`);
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Authentication required. Please login again.');
+        setLoading(false);
+        return;
+      }
+
+      const userId = getUserId();
+      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      
+      if (!backendUrl) {
+        setError('Backend URL not configured');
+        setLoading(false);
+        return;
+      }
+
+      console.log(`Fetching transactions for user: ${userId}`);
+      
+      const response = await axios.get(`${backendUrl}/api/transaction/users/${userId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
       console.log('Fetched transactions:', response.data);
       
       let transactionsData = [];
+      
+      // ✅ Safely extract data
       if (response.data && response.data.data) {
         transactionsData = Array.isArray(response.data.data) ? response.data.data : [response.data.data];
       } else if (response.data && Array.isArray(response.data)) {
         transactionsData = response.data;
+      } else if (response.data && response.data.transactions) {
+        transactionsData = response.data.transactions;
       } else if (response.data) {
         transactionsData = [response.data];
       }
       
-      const safeTransactions = transactionsData.map(t => ({
-        id: t.id || Date.now(),
-        description: t.description || 'No description',
-        category: t.category || 'Uncategorized',
-        type: t.type || 'EXPENSE',
-        amount: t.amount || 0,
-        transactiondate: t.transactiondate || t.date || new Date().toISOString().split('T')[0],
-        categoryId: t.categoryId
-      }));
+      // ✅ Safely map transactions with proper error handling
+      const safeTransactions = transactionsData
+        .filter(t => t && typeof t === 'object')
+        .map(t => ({
+          id: t.id || `temp-${Date.now()}-${Math.random()}`,
+          description: t.description || t.merchant || 'No description',
+          category: t.category || ID_TO_CATEGORY[t.categoryId] || 'Uncategorized',
+          type: t.type || (t.amount > 0 ? 'INCOME' : 'EXPENSE'),
+          amount: Math.abs(t.amount || 0),
+          transactiondate: t.transactiondate || t.date || new Date().toISOString().split('T')[0],
+          categoryId: t.categoryId
+        }));
       
       setTransactions(safeTransactions);
+      
     } catch (error) {
       console.error('Error fetching transactions:', error);
-      setError('Failed to load transactions. Please check if backend is running.');
+      
+      if (error.response) {
+        // Server responded with error
+        if (error.response.status === 401) {
+          setError('Session expired. Please login again.');
+          setTimeout(() => {
+            window.location.href = '/login';
+          }, 2000);
+        } else if (error.response.status === 404) {
+          setError('No transactions found. Create your first transaction!');
+          setTransactions([]);
+        } else {
+          setError(error.response.data?.message || 'Failed to load transactions');
+        }
+      } else if (error.request) {
+        setError('Unable to connect to server. Please check if backend is running.');
+      } else {
+        setError('An unexpected error occurred.');
+      }
       setTransactions([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [getUserId]);
 
-  // Add new transaction
+  // ✅ Add new transaction with validation
   const handleNewTransaction = async (transaction) => {
     console.log('New transaction:', transaction);
     
+    // ✅ Validate transaction data
+    if (!transaction.amount || transaction.amount <= 0) {
+      alert('Please enter a valid amount');
+      return;
+    }
+    
+    if (!transaction.description?.trim()) {
+      alert('Please enter a description');
+      return;
+    }
+    
+    if (!transaction.category) {
+      alert('Please select a category');
+      return;
+    }
+    
     try {
-      const categoryId = CATEGORY_TO_ID[transaction.category] || 0;
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Authentication required. Please login again.');
+        window.location.href = '/login';
+        return;
+      }
+      
+      const categoryId = CATEGORY_TO_ID[transaction.category];
+      
+      // ✅ Check if category mapping exists
+      if (!categoryId) {
+        console.error('Unknown category:', transaction.category);
+        alert(`Unknown category: ${transaction.category}. Please select a valid category.`);
+        return;
+      }
+      
+      const userId = getUserId();
+      const backendUrl = import.meta.env.VITE_BACKEND_URL;
       
       const payload = {
         amount: Number(transaction.amount),
-        type: transaction.type,
+        type: transaction.type.toUpperCase(),
         category: transaction.category,
         categoryId: categoryId,
-        description: transaction.description,
-        date: transaction.date || new Date().toISOString().split('T')[0]
+        description: transaction.description.trim(),
+        date: transaction.date || new Date().toISOString().split('T')[0],
+        userId: userId
       };
       
-      console.log('Sending payload with categoryId:', payload);
+      console.log('Sending payload:', payload);
       
-      const backendUrl = import.meta.env.VITE_BACKEND_URL;
-      const response = await axios.post(`${backendUrl}/api/transaction/1`, payload);
+      const response = await axios.post(`${backendUrl}/api/transaction/${userId}`, payload, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
       console.log('Transaction saved:', response.data);
       
+      // ✅ Refresh transactions
       await fetchTransactions();
       setShowForm(false);
-      console.log('Transaction created successfully!');
+      
+      // ✅ Show success message (optional)
+      // alert('Transaction created successfully!');
       
     } catch (error) {
       console.error('Error saving transaction:', error);
-      const errorMsg = error.response?.data?.message || error.message || 'Failed to create transaction';
-      alert(`Error: ${errorMsg}`);
+      
+      let errorMessage = 'Failed to create transaction. ';
+      if (error.response) {
+        errorMessage += error.response.data?.message || `Server error: ${error.response.status}`;
+      } else if (error.request) {
+        errorMessage += 'Unable to connect to server.';
+      } else {
+        errorMessage += error.message;
+      }
+      
+      alert(`Error: ${errorMessage}`);
     }
   };
 
+  // ✅ Export to CSV with proper formatting
   const exportToCSV = () => {
-    console.log('CSV export feature coming soon!');
+    try {
+      if (transactions.length === 0) {
+        alert('No transactions to export');
+        return;
+      }
+      
+      const headers = ['Date', 'Description', 'Category', 'Type', 'Amount'];
+      const csvData = transactions.map(t => [
+        t.transactiondate,
+        `"${t.description.replace(/"/g, '""')}"`, // Escape quotes
+        t.category,
+        t.type,
+        t.amount
+      ]);
+      
+      const csvContent = [headers, ...csvData].map(row => row.join(',')).join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `transactions_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      console.log('CSV exported successfully');
+    } catch (error) {
+      console.error('Error exporting CSV:', error);
+      alert('Failed to export CSV');
+    }
   };
 
   useEffect(() => {
     fetchTransactions();
-  }, []);
+  }, [fetchTransactions]);
 
-  const filtered = filterType === 'all' 
-    ? transactions 
-    : transactions.filter(t => (t.type?.toLowerCase() || t.type) === filterType);
-  
+  // ✅ Filter transactions with safe type checking
+  const filtered = React.useMemo(() => {
+    let filteredData = transactions;
+    
+    // Filter by type
+    if (filterType !== 'all') {
+      filteredData = filteredData.filter(t => {
+        const transactionType = (t.type || '').toLowerCase();
+        return transactionType === filterType.toLowerCase();
+      });
+    }
+    
+    // Filter by date range
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    switch(dateRange) {
+      case 'last30':
+        const thirtyDaysAgo = new Date(today);
+        thirtyDaysAgo.setDate(today.getDate() - 30);
+        filteredData = filteredData.filter(t => new Date(t.transactiondate) >= thirtyDaysAgo);
+        break;
+      case 'last90':
+        const ninetyDaysAgo = new Date(today);
+        ninetyDaysAgo.setDate(today.getDate() - 90);
+        filteredData = filteredData.filter(t => new Date(t.transactiondate) >= ninetyDaysAgo);
+        break;
+      case 'thisYear':
+        filteredData = filteredData.filter(t => new Date(t.transactiondate).getFullYear() === now.getFullYear());
+        break;
+      default:
+        break;
+    }
+    
+    // Sort by date (newest first)
+    return filteredData.sort((a, b) => new Date(b.transactiondate) - new Date(a.transactiondate));
+  }, [transactions, filterType, dateRange]);
+
   const totalPages = Math.ceil(filtered.length / itemsPerPage);
   const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
-  if (error) {
+  // Reset to first page when filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterType, dateRange]);
+
+  // ✅ Statistics
+  const stats = React.useMemo(() => {
+    const income = filtered.filter(t => t.type?.toLowerCase() === 'income').reduce((sum, t) => sum + t.amount, 0);
+    const expense = filtered.filter(t => t.type?.toLowerCase() === 'expense').reduce((sum, t) => sum + t.amount, 0);
+    return { income, expense, balance: income - expense };
+  }, [filtered]);
+
+  if (error && transactions.length === 0) {
     return (
       <Layout>
-        <div className="p-8 pt-24">
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg">
-            <p className="font-bold">Error:</p>
-            <p>{error}</p>
-            <button onClick={fetchTransactions} className="mt-3 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">
-              Retry
-            </button>
+        <div className="p-8 pt-24 min-h-screen">
+          <div className="bg-red-50 border border-red-200 text-red-700 px-6 py-6 rounded-xl max-w-md mx-auto text-center">
+            <AlertCircle size={48} className="mx-auto mb-4 text-red-500" />
+            <p className="font-bold text-lg mb-2">Error Loading Transactions</p>
+            <p className="text-sm mb-4">{error}</p>
+            <div className="flex gap-3 justify-center">
+              <button 
+                onClick={fetchTransactions} 
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+              >
+                Retry
+              </button>
+              <button 
+                onClick={() => setShowForm(true)} 
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+              >
+                Create Transaction
+              </button>
+            </div>
           </div>
         </div>
       </Layout>
@@ -134,7 +356,7 @@ const Transactions = () => {
 
   return (
     <Layout>
-      <div className="p-8 pt-24 bg-white">
+      <div className="p-8 pt-24 bg-white min-h-screen">
         {/* Header */}
         <div className="mb-10 flex flex-col md:flex-row justify-between gap-6">
           <div>
@@ -142,87 +364,160 @@ const Transactions = () => {
             <p className="text-gray-500">A curated record of your financial movements.</p>
           </div>
           <div className="flex gap-3">
-            <button onClick={exportToCSV} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-50">
+            <button 
+              onClick={exportToCSV} 
+              disabled={transactions.length === 0}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
               <Download size={16} /> Export CSV
             </button>
-            <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700">
+            <button 
+              onClick={() => setShowForm(true)} 
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+            >
               <Plus size={16} /> New Transaction
             </button>
+          </div>
+        </div>
+
+        {/* Stats Summary */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <div className="bg-gradient-to-r from-emerald-50 to-green-50 p-4 rounded-xl border border-emerald-100">
+            <p className="text-sm text-gray-600 mb-1">Total Income</p>
+            <p className="text-2xl font-bold text-emerald-600">${stats.income.toLocaleString()}</p>
+          </div>
+          <div className="bg-gradient-to-r from-red-50 to-orange-50 p-4 rounded-xl border border-red-100">
+            <p className="text-sm text-gray-600 mb-1">Total Expenses</p>
+            <p className="text-2xl font-bold text-red-600">${stats.expense.toLocaleString()}</p>
+          </div>
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-xl border border-blue-100">
+            <p className="text-sm text-gray-600 mb-1">Net Balance</p>
+            <p className={`text-2xl font-bold ${stats.balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+              ${stats.balance.toLocaleString()}
+            </p>
           </div>
         </div>
 
         {/* Filters */}
         <div className="bg-white rounded-xl border border-gray-200 p-6 mb-8 flex flex-wrap gap-4 items-center">
           <div className="flex gap-2">
-            <button onClick={() => setFilterType('all')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${filterType === 'all' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-              All ({transactions.length})
-            </button>
-            <button onClick={() => setFilterType('income')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${filterType === 'income' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-              Income ({transactions.filter(t => t.type?.toLowerCase() === 'income').length})
-            </button>
-            <button onClick={() => setFilterType('expense')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${filterType === 'expense' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-              Expense ({transactions.filter(t => t.type?.toLowerCase() === 'expense').length})
-            </button>
+            {['all', 'income', 'expense'].map(type => (
+              <button 
+                key={type}
+                onClick={() => setFilterType(type)} 
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  filterType === type 
+                    ? 'bg-emerald-600 text-white' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                {type.charAt(0).toUpperCase() + type.slice(1)} ({transactions.filter(t => type === 'all' ? true : (t.type?.toLowerCase() === type)).length})
+              </button>
+            ))}
           </div>
           
-          <div className="flex-1">
+          <div className="flex-1 min-w-[150px]">
             <div className="relative">
               <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <select className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700">
-                <option>Last 30 Days</option>
-                <option>Last 90 Days</option>
-                <option>This Year</option>
+              <select 
+                value={dateRange}
+                onChange={(e) => setDateRange(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="last30">Last 30 Days</option>
+                <option value="last90">Last 90 Days</option>
+                <option value="thisYear">This Year</option>
+                <option value="all">All Time</option>
               </select>
             </div>
           </div>
           
-          <button className="p-2 text-gray-500 hover:text-gray-700">
+          <button className="p-2 text-gray-500 hover:text-gray-700 transition-colors">
             <Filter size={18} />
           </button>
         </div>
 
         {/* Transactions Table */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <table className="w-full text-left">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Date</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Description</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Category</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Type</th>
-                <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500 text-right">Amount</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {loading && transactions.length === 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-gray-50">
                 <tr>
-                  <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
-                    <div className="flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div></div>
-                    <p className="mt-2">Loading transactions...</p>
-                  </td>
+                  <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Date</th>
+                  <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Description</th>
+                  <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Category</th>
+                  <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Type</th>
+                  <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500 text-right">Amount</th>
+                  <th></th>
                 </tr>
-              ) : paginated.length === 0 ? (
-                <tr>
-                  <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
-                    No transactions found. Click "New Transaction" to add one.
-                  </td>
-                </tr>
-              ) : (
-                paginated.map((tx) => <TransactionRow key={tx.id} transaction={tx} />)
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {loading && transactions.length === 0 ? (
+                  <tr>
+                    <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
+                      <div className="flex justify-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
+                      </div>
+                      <p className="mt-2">Loading transactions...</p>
+                    </td>
+                  </tr>
+                ) : paginated.length === 0 ? (
+                  <tr>
+                    <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
+                      {filterType !== 'all' 
+                        ? `No ${filterType} transactions found.` 
+                        : 'No transactions found. Click "New Transaction" to add one.'}
+                    </td>
+                  </tr>
+                ) : (
+                  paginated.map((tx, index) => (
+                    <TransactionRow key={tx.id || index} transaction={tx} />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
           
           {totalPages > 1 && (
-            <div className="px-6 py-6 border-t border-gray-100 flex justify-between items-center">
-              <p className="text-sm text-gray-500">Showing {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filtered.length)} of {filtered.length} transactions</p>
+            <div className="px-6 py-6 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-4">
+              <p className="text-sm text-gray-500">
+                Showing {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filtered.length)} of {filtered.length} transactions
+              </p>
               <div className="flex gap-2">
-                <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-2 rounded-lg border border-gray-200 disabled:opacity-30 hover:bg-gray-50"><ChevronLeft size={16} /></button>
-                {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map(page => (
-                  <button key={page} onClick={() => setCurrentPage(page)} className={`w-10 h-10 rounded-lg ${currentPage === page ? 'bg-emerald-600 text-white' : 'hover:bg-gray-50 text-gray-700'}`}>{page}</button>
-                ))}
-                <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-2 rounded-lg border border-gray-200 disabled:opacity-30 hover:bg-gray-50"><ChevronRight size={16} /></button>
+                <button 
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))} 
+                  disabled={currentPage === 1} 
+                  className="p-2 rounded-lg border border-gray-200 disabled:opacity-30 hover:bg-gray-50 transition-colors"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                  let pageNum = i + 1;
+                  if (totalPages > 5 && currentPage > 3) {
+                    pageNum = currentPage - 3 + i;
+                    if (pageNum > totalPages) return null;
+                  }
+                  return pageNum <= totalPages && (
+                    <button 
+                      key={pageNum} 
+                      onClick={() => setCurrentPage(pageNum)} 
+                      className={`w-10 h-10 rounded-lg transition-colors ${
+                        currentPage === pageNum 
+                          ? 'bg-emerald-600 text-white' 
+                          : 'hover:bg-gray-50 text-gray-700'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+                <button 
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} 
+                  disabled={currentPage === totalPages} 
+                  className="p-2 rounded-lg border border-gray-200 disabled:opacity-30 hover:bg-gray-50 transition-colors"
+                >
+                  <ChevronRight size={16} />
+                </button>
               </div>
             </div>
           )}
@@ -230,25 +525,42 @@ const Transactions = () => {
 
         {/* Insights Section */}
         <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-8">
-          <div className="col-span-1 bg-emerald-50 p-8 rounded-xl relative overflow-hidden group">
+          <div className="col-span-1 bg-emerald-50 p-8 rounded-xl relative overflow-hidden group hover:shadow-lg transition-shadow">
             <div className="relative z-10">
               <h3 className="text-xl font-bold mb-2 text-gray-900">Spending Insight</h3>
-              <p className="text-gray-600 text-sm mb-6">You've spent 12% more on Dining compared to last month. Consider reviewing your weekly caps.</p>
-              <a href="#" className="inline-flex items-center gap-2 text-sm font-bold text-emerald-700 hover:gap-3 transition-all">View Analysis <TrendingUp size={14} /></a>
+              <p className="text-gray-600 text-sm mb-6">
+                {stats.expense > 0 
+                  ? `Your total expenses this period are $${stats.expense.toLocaleString()}. ${stats.expense > stats.income ? 'Consider reviewing your spending habits.' : 'Great job keeping expenses under control!'}`
+                  : 'Add some transactions to get spending insights.'}
+              </p>
+              <a href="/budget" className="inline-flex items-center gap-2 text-sm font-bold text-emerald-700 hover:gap-3 transition-all">
+                View Analysis <TrendingUp size={14} />
+              </a>
             </div>
           </div>
           
-          <div className="col-span-2 bg-gray-50 p-8 rounded-xl flex items-center justify-between border border-gray-200">
+          <div className="col-span-2 bg-gray-50 p-8 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4 border border-gray-200">
             <div>
               <h3 className="text-xl font-bold mb-2 text-gray-900">Secure Export Ready</h3>
-              <p className="text-gray-600 text-sm">Your Q3 tax summary has been compiled and is ready for your accountant.</p>
+              <p className="text-gray-600 text-sm">Your transaction history can be exported for tax purposes.</p>
             </div>
-            <button className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-lg hover:bg-emerald-700 transition-transform">Download Report</button>
+            <button 
+              onClick={exportToCSV}
+              disabled={transactions.length === 0}
+              className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            >
+              Download Report
+            </button>
           </div>
         </div>
       </div>
       
-      {showForm && <TransactionForm onSubmit={handleNewTransaction} onClose={() => setShowForm(false)} />}
+      {showForm && (
+        <TransactionForm 
+          onSubmit={handleNewTransaction} 
+          onClose={() => setShowForm(false)} 
+        />
+      )}
     </Layout>
   );
 };

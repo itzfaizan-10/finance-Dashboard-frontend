@@ -17,7 +17,7 @@ function App() {
     <AuthProvider>
       <Router>
         <Routes>
-          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/transactions" element={<ProtectedRoute><Transactions /></ProtectedRoute>} />
