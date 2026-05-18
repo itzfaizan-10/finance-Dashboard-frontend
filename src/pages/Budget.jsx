@@ -2,15 +2,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/layout/Layout';
 import BudgetCard from '../components/BudgetCard';
-import { Plus, TrendingDown, PiggyBank, AlertCircle, X } from 'lucide-react';
+import { Plus, TrendingDown, PiggyBank, AlertCircle, X, RefreshCw } from 'lucide-react';
 import axios from 'axios';
+import { useAuth } from '../authcontext/AuthContext';
 
 const Budget = () => {
+  const { user, isAuthenticated, refreshToken, logout, getSessionStatus } = useAuth();
   const [budgets, setBudgets] = useState([]);
   const [categories, setCategories] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null); // ✅ Add error state
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [sessionInfo, setSessionInfo] = useState(null);
   const [summary, setSummary] = useState({
     totalSpent: 0,
     totalLimit: 0,
@@ -22,27 +27,89 @@ const Budget = () => {
     limitAmount: ''
   });
 
-  // Categories mapping with proper names
+  const backendUrl = import.meta.env.VITE_BACKEND_URL;
+  
+  // ✅ Get user ID from auth context (assuming user object has userId)
+  const getUserId = useCallback(() => {
+    if (!user) return null;
+    return user.userId || user.id || user.sub;
+  }, [user]);
+
+  // ✅ Create axios instance with auth interceptor
+  const apiClient = useCallback(() => {
+    const token = localStorage.getItem("token");
+    const instance = axios.create({
+      baseURL: backendUrl,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` })
+      }
+    });
+
+    // Response interceptor for token refresh
+    instance.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        const originalRequest = error.config;
+        
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true;
+          
+          try {
+            const refreshed = await refreshToken();
+            if (refreshed) {
+              const newToken = localStorage.getItem("token");
+              originalRequest.headers.Authorization = `Bearer ${newToken}`;
+              return instance(originalRequest);
+            }
+          } catch (refreshError) {
+            logout();
+            window.location.href = '/login';
+            return Promise.reject(refreshError);
+          }
+        }
+        
+        return Promise.reject(error);
+      }
+    );
+    
+    return instance;
+  }, [backendUrl, refreshToken, logout]);
+
+  // ✅ Categories mapping (could also be fetched from backend)
   const fetchCategories = useCallback(async () => {
     try {
+      // Try to fetch from backend first
+      const client = apiClient();
+      try {
+        const response = await client.get('/api/categories');
+        if (response.data && Array.isArray(response.data)) {
+          setCategories(response.data);
+          return;
+        }
+      } catch (err) {
+        console.log('Using fallback categories');
+      }
+      
+      // Fallback categories
       const categoriesList = [
-        { id: 1, name: 'Dinner' },
-        { id: 2, name: 'Driving' },
-        { id: 3, name: 'Shopping' },
-        { id: 4, name: 'Entertainment' },
-        { id: 5, name: 'Utilities' },
-        { id: 6, name: 'Groceries' },
-        { id: 7, name: 'Transportation' },
-        { id: 8, name: 'Healthcare' },
-        { id: 9, name: 'Education' },
-        { id: 10, name: 'Rent' }
+        { id: 1, name: 'Dinner', icon: '🍽️' },
+        { id: 2, name: 'Driving', icon: '🚗' },
+        { id: 3, name: 'Shopping', icon: '🛍️' },
+        { id: 4, name: 'Entertainment', icon: '🎬' },
+        { id: 5, name: 'Utilities', icon: '💡' },
+        { id: 6, name: 'Groceries', icon: '🛒' },
+        { id: 7, name: 'Transportation', icon: '🚌' },
+        { id: 8, name: 'Healthcare', icon: '🏥' },
+        { id: 9, name: 'Education', icon: '📚' },
+        { id: 10, name: 'Rent', icon: '🏠' }
       ];
       setCategories(categoriesList);
     } catch (err) {
-      console.error('GET CATEGORIES ERROR:', err);
+      console.error('Error fetching categories:', err);
       setError('Failed to load categories');
     }
-  }, []);
+  }, [apiClient]);
 
   // Get category name from ID
   const getCategoryName = useCallback((categoryId) => {
@@ -50,42 +117,78 @@ const Budget = () => {
     return category ? category.name : null;
   }, [categories]);
 
-  // ✅ Wrap fetchBudgets in useCallback to prevent infinite loops
-  const fetchBudgets = useCallback(async () => {
-    setLoading(true);
+  // ✅ Check session periodically
+  useEffect(() => {
+    const checkSession = () => {
+      const status = getSessionStatus();
+      setSessionInfo(status);
+      
+      if (status.isActive && status.remainingSeconds && status.remainingSeconds <= 300) {
+        console.warn(`⚠️ Budget page - Session expires in ${Math.floor(status.remainingSeconds / 60)} minutes`);
+      }
+    };
+    
+    checkSession();
+    const interval = setInterval(checkSession, 60000);
+    
+    return () => clearInterval(interval);
+  }, [getSessionStatus]);
+
+  // ✅ Fetch budgets with authentication
+  const fetchBudgets = useCallback(async (showRefreshIndicator = false) => {
+    if (showRefreshIndicator) {
+      setIsRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    
     setError(null);
     
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL;
-      
-      if (!backendUrl) {
-        console.error("❌ Missing backend URL");
-        setError("Backend URL is not configured");
+      // Check authentication first
+      if (!isAuthenticated()) {
+        setError("Your session has expired. Please login again.");
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 2000);
         setLoading(false);
+        setIsRefreshing(false);
         return;
       }
       
-      const res = await axios.get(`${backendUrl}/api/budget/1`);
-      console.log('=== FULL RESPONSE ===', res.data);
+      const userId = getUserId();
+      if (!userId) {
+        throw new Error("User ID not found");
+      }
+      
+      if (!backendUrl) {
+        throw new Error("Backend URL is not configured");
+      }
+      
+      const client = apiClient();
+      const response = await client.get(`/api/budget/${userId}`);
+      
+      console.log('Budget response:', response.data);
       
       let budgetsData = [];
       let summaryData = null;
       
-      if (res.data?.data) {
-        budgetsData = Array.isArray(res.data.data) ? res.data.data : [res.data.data];
-        summaryData = res.data.summary;
-      } else if (Array.isArray(res.data)) {
-        budgetsData = res.data;
-      } else if (res.data?.budgets) {
-        budgetsData = res.data.budgets;
-        summaryData = res.data.summary;
-      } else if (res.data) {
-        budgetsData = [res.data];
+      // Parse response data
+      if (response.data?.data) {
+        budgetsData = Array.isArray(response.data.data) ? response.data.data : [response.data.data];
+        summaryData = response.data.summary;
+      } else if (Array.isArray(response.data)) {
+        budgetsData = response.data;
+      } else if (response.data?.budgets) {
+        budgetsData = response.data.budgets;
+        summaryData = response.data.summary;
+      } else if (response.data) {
+        budgetsData = [response.data];
       }
       
-      // ✅ Safe mapping with null checks
+      // Transform budgets with category names
       const budgetsWithCategoryName = budgetsData
-        .filter(budget => budget) // Remove null/undefined
+        .filter(budget => budget)
         .map(budget => {
           let categoryName = getCategoryName(budget.categoryId);
           
@@ -97,42 +200,43 @@ const Budget = () => {
             categoryName = `Category ${budget.categoryId || 'Unknown'}`;
           }
           
-          const limitAmount = budget.limitAmount || 0;
-          const spentAmount = budget.spentAmount || 0;
-          const remainingAmount = budget.remainingAmount || (limitAmount - spentAmount);
-          const percentageUsed = budget.percentageUsed || (limitAmount > 0 ? (spentAmount / limitAmount) * 100 : 0);
+          const limitAmount = Number(budget.limitAmount) || 0;
+          const spentAmount = Number(budget.spentAmount) || 0;
+          const remainingAmount = budget.remainingAmount !== undefined ? 
+            Number(budget.remainingAmount) : limitAmount - spentAmount;
+          const percentageUsed = budget.percentageUsed !== undefined ?
+            Number(budget.percentageUsed) : (limitAmount > 0 ? (spentAmount / limitAmount) * 100 : 0);
           
           return {
-            id: budget.id || Math.random(),
+            id: budget.id || `budget_${Date.now()}_${Math.random()}`,
             categoryId: budget.categoryId,
             categoryName: categoryName,
             category: categoryName,
             limitAmount: limitAmount,
             spentAmount: spentAmount,
-            remainingAmount: remainingAmount,
-            percentageUsed: percentageUsed,
-            status: budget.status || (spentAmount > limitAmount ? 'EXCEEDED' : 'WITHIN_LIMIT'),
-            month: budget.month,
-            year: budget.year
+            remainingAmount: Math.max(0, remainingAmount),
+            percentageUsed: Math.min(100, percentageUsed),
+            status: budget.status || (spentAmount > limitAmount ? 'EXCEEDED' : 
+                     percentageUsed >= 90 ? 'WARNING' : 'WITHIN_LIMIT'),
+            month: budget.month || new Date().getMonth() + 1,
+            year: budget.year || new Date().getFullYear()
           };
         });
       
-      console.log('Budgets with names:', budgetsWithCategoryName);
       setBudgets(budgetsWithCategoryName);
       
-      // Use summary from backend if available
+      // Update summary
       if (summaryData) {
         setSummary({
-          totalSpent: summaryData.totalSpent || 0,
-          totalLimit: summaryData.totalLimit || 0,
-          totalRemaining: summaryData.totalRemaining || (summaryData.totalLimit - summaryData.totalSpent),
-          overallPercentage: summaryData.overallPercentage || 
-                             (summaryData.totalLimit > 0 ? (summaryData.totalSpent / summaryData.totalLimit) * 100 : 0)
+          totalSpent: Number(summaryData.totalSpent) || 0,
+          totalLimit: Number(summaryData.totalLimit) || 0,
+          totalRemaining: Number(summaryData.totalRemaining) || 0,
+          overallPercentage: Number(summaryData.overallPercentage) || 0
         });
       } else {
-        // Fallback calculation
-        const totalSpent = budgetsWithCategoryName.reduce((sum, b) => sum + (b.spentAmount || 0), 0);
-        const totalLimit = budgetsWithCategoryName.reduce((sum, b) => sum + (b.limitAmount || 0), 0);
+        // Calculate summary from budgets
+        const totalSpent = budgetsWithCategoryName.reduce((sum, b) => sum + b.spentAmount, 0);
+        const totalLimit = budgetsWithCategoryName.reduce((sum, b) => sum + b.limitAmount, 0);
         setSummary({
           totalSpent: totalSpent,
           totalLimit: totalLimit,
@@ -142,22 +246,51 @@ const Budget = () => {
       }
       
     } catch (err) {
-      console.error('GET ERROR:', err);
-      setError(err.response?.data?.message || err.message || "Failed to fetch budgets");
-      // ✅ Set empty budgets on error instead of breaking
-      setBudgets([]);
+      console.error('Error fetching budgets:', err);
+      
+      if (err.response?.status === 401) {
+        setError('Session expired. Please login again.');
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 2000);
+      } else if (err.response?.status === 404) {
+        // No budgets found - this is fine, just show empty state
+        setBudgets([]);
+        setError(null);
+      } else {
+        setError(err.response?.data?.message || err.message || "Failed to fetch budgets");
+        setBudgets([]);
+      }
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
+      setInitialLoading(false);
     }
-  }, [getCategoryName]); // ✅ Add getCategoryName as dependency
+  }, [backendUrl, apiClient, isAuthenticated, getUserId, getCategoryName]);
+
+  // Auto-refresh budgets every 5 minutes
+  useEffect(() => {
+    fetchBudgets();
+    
+    const intervalId = setInterval(() => {
+      if (isAuthenticated()) {
+        console.log("🔄 Auto-refreshing budgets...");
+        fetchBudgets(true);
+      }
+    }, 300000);
+    
+    return () => clearInterval(intervalId);
+  }, [fetchBudgets, isAuthenticated]);
 
   useEffect(() => {
     fetchCategories();
-    fetchBudgets();
-  }, [fetchCategories, fetchBudgets]); // ✅ Add proper dependencies
+  }, [fetchCategories]);
 
-  // ✅ Safe calculation with null check
+  // ✅ Calculate over budget categories safely
   const overBudget = budgets.filter(b => b && b.spentAmount > b.limitAmount);
+  const warningBudget = budgets.filter(b => b && b.percentageUsed >= 80 && b.percentageUsed < 100);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -169,8 +302,21 @@ const Budget = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
     if (!formData.categoryId || !formData.limitAmount) {
       alert("Please fill all fields");
+      return;
+    }
+    
+    if (!isAuthenticated()) {
+      alert("Your session has expired. Please login again.");
+      window.location.href = '/login';
+      return;
+    }
+    
+    const userId = getUserId();
+    if (!userId) {
+      alert("User not found. Please login again.");
       return;
     }
     
@@ -178,26 +324,27 @@ const Budget = () => {
     setError(null);
     
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL;
-      
       if (!backendUrl) {
         throw new Error("Backend URL is not configured");
       }
       
+      const client = apiClient();
       const payload = {
         categoryId: Number(formData.categoryId),
         limitAmount: Number(formData.limitAmount),
         month: new Date().getMonth() + 1,
-        year: new Date().getFullYear()
+        year: new Date().getFullYear(),
+        userId: userId
       };
       
-      console.log('Sending payload:', payload);
-      const response = await axios.post(`${backendUrl}/api/budget/1`, payload);
-      console.log('Post response:', response.data);
+      console.log('Creating budget:', payload);
+      const response = await client.post(`/api/budget/${userId}`, payload);
+      console.log('Budget created:', response.data);
       
-      // ✅ Only call fetchBudgets once
+      // Refresh budgets list
       await fetchBudgets();
       
+      // Reset form
       setFormData({
         categoryId: '',
         limitAmount: ''
@@ -207,28 +354,64 @@ const Budget = () => {
     } catch (error) {
       console.error("Error adding budget:", error);
       const errorMessage = error.response?.data?.message || error.message || "Failed to add budget";
-      alert(errorMessage);
       setError(errorMessage);
+      alert(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ Loading state
-  if (loading && budgets.length === 0) {
+  const handleDeleteBudget = async (budgetId) => {
+    if (!confirm('Are you sure you want to delete this budget category?')) return;
+    
+    if (!isAuthenticated()) {
+      alert("Session expired. Please login again.");
+      window.location.href = '/login';
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      const userId = getUserId();
+      const client = apiClient();
+      await client.delete(`/api/budget/${userId}/${budgetId}`);
+      
+      // Refresh budgets
+      await fetchBudgets();
+      
+    } catch (error) {
+      console.error("Error deleting budget:", error);
+      alert(error.response?.data?.message || "Failed to delete budget");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleManualRefresh = async () => {
+    await fetchBudgets(true);
+  };
+
+  // Loading state
+  if (initialLoading) {
     return (
       <Layout>
         <div className="p-8 pt-24 flex justify-center items-center min-h-screen">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto"></div>
             <p className="mt-4 text-gray-500">Loading budgets...</p>
+            {sessionInfo?.remainingSeconds && (
+              <p className="mt-2 text-xs text-gray-400">
+                Session expires in {Math.floor(sessionInfo.remainingSeconds / 60)} minutes
+              </p>
+            )}
           </div>
         </div>
       </Layout>
     );
   }
 
-  // ✅ Error state
+  // Error state
   if (error && budgets.length === 0) {
     return (
       <Layout>
@@ -237,12 +420,21 @@ const Budget = () => {
             <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
             <h3 className="text-xl font-bold text-gray-900 mb-2">Error Loading Budgets</h3>
             <p className="text-gray-500 mb-4">{error}</p>
-            <button 
-              onClick={fetchBudgets}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-            >
-              Try Again
-            </button>
+            <div className="space-x-3">
+              <button 
+                onClick={handleManualRefresh}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 inline-flex items-center gap-2"
+              >
+                <RefreshCw size={16} />
+                Try Again
+              </button>
+              <button 
+                onClick={() => window.location.href = '/dashboard'}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+              >
+                Go to Dashboard
+              </button>
+            </div>
           </div>
         </div>
       </Layout>
@@ -252,74 +444,127 @@ const Budget = () => {
   return (
     <Layout>
       <div className="p-8 pt-24 bg-white min-h-screen">
-        <div className="mb-10">
-          <h2 className="text-3xl font-extrabold tracking-tight text-black">Monthly Budget</h2>
-          <p className="text-gray-500">Your curated financial outlook for {new Date().toLocaleString('default', { month: 'long' })}.</p>
+        
+        {/* Session warning banner */}
+        {sessionInfo?.remainingSeconds && sessionInfo.remainingSeconds <= 600 && (
+          <div className="mb-6 bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-lg flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <span>⏰</span>
+              <span className="text-sm">
+                Your session will expire in {Math.floor(sessionInfo.remainingSeconds / 60)} minutes.
+                {sessionInfo.remainingSeconds <= 300 && ' Please save your work!'}
+              </span>
+            </div>
+            <button 
+              onClick={logout}
+              className="text-sm bg-yellow-100 px-3 py-1 rounded hover:bg-yellow-200"
+            >
+              Extend Session
+            </button>
+          </div>
+        )}
+        
+        {/* Header with refresh button */}
+        <div className="mb-10 flex justify-between items-start">
+          <div>
+            <h2 className="text-3xl font-extrabold tracking-tight text-black">Monthly Budget</h2>
+            <p className="text-gray-500">
+              Your curated financial outlook for {new Date().toLocaleString('default', { month: 'long' })} {new Date().getFullYear()}.
+            </p>
+          </div>
+          <button
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            className="p-2 text-gray-500 hover:text-emerald-600 transition-colors disabled:opacity-50"
+            title="Refresh data"
+          >
+            <RefreshCw size={20} className={isRefreshing ? 'animate-spin' : ''} />
+          </button>
         </div>
 
+        {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
           <div className="md:col-span-2 bg-white p-8 rounded-xl border border-gray-200">
             <div className="flex justify-between items-start">
               <div>
                 <span className="text-xs uppercase tracking-widest text-gray-500">Total Remaining</span>
                 <div className="text-5xl font-bold text-emerald-600 mt-2">
-                  ${(summary.totalRemaining || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  ${summary.totalRemaining.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
               </div>
-              <div className="bg-gray-100 text-gray-700 px-4 py-1.5 rounded-full text-sm font-semibold">
-                {(summary.overallPercentage || 0) >= 100 ? 'Over Budget' : (summary.overallPercentage || 0) >= 80 ? 'Near Limit' : 'On Track'}
+              <div className={`px-4 py-1.5 rounded-full text-sm font-semibold ${
+                summary.overallPercentage >= 100 ? 'bg-red-100 text-red-700' :
+                summary.overallPercentage >= 80 ? 'bg-yellow-100 text-yellow-700' :
+                'bg-gray-100 text-gray-700'
+              }`}>
+                {summary.overallPercentage >= 100 ? 'Over Budget' : 
+                 summary.overallPercentage >= 80 ? 'Near Limit' : 'On Track'}
               </div>
             </div>
             <div className="mt-8">
               <div className="flex justify-between text-sm mb-3">
-                <span className="text-gray-600">{Math.round(summary.overallPercentage || 0)}% of monthly limit reached</span>
+                <span className="text-gray-600">{Math.round(summary.overallPercentage)}% of monthly limit reached</span>
                 <span className="font-bold text-gray-900">
-                  ${(summary.totalSpent || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / 
-                  ${(summary.totalLimit || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  ${summary.totalSpent.toLocaleString(undefined, { minimumFractionDigits: 2 })} / 
+                  ${summary.totalLimit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </span>
               </div>
               <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
                 <div 
                   className="h-full bg-emerald-600 rounded-full transition-all duration-500" 
-                  style={{ width: `${Math.min(summary.overallPercentage || 0, 100)}%` }}
-                ></div>
+                  style={{ width: `${Math.min(summary.overallPercentage, 100)}%` }}
+                />
               </div>
             </div>
           </div>
           
-          {overBudget.length > 0 && overBudget[0] && (
+          {/* Alert Card */}
+          {overBudget.length > 0 && (
             <div className="bg-red-50 p-8 rounded-xl border border-red-200">
               <div className="flex items-center gap-2 text-red-600 mb-4">
                 <AlertCircle size={16} />
                 <span className="font-bold uppercase text-xs">Budget Alert</span>
               </div>
               <h3 className="text-xl font-bold text-red-800 leading-tight">
-                {overBudget[0].categoryName || 'Category'} exceeds limit
+                {overBudget[0].categoryName} exceeds limit
               </h3>
               <p className="text-red-600 text-sm mb-4">
-                You've spent ${((overBudget[0].spentAmount || 0) - (overBudget[0].limitAmount || 0)).toLocaleString()} over your ${(overBudget[0].limitAmount || 0).toLocaleString()} allocation.
+                You've spent ${(overBudget[0].spentAmount - overBudget[0].limitAmount).toLocaleString()} over your ${overBudget[0].limitAmount.toLocaleString()} allocation.
               </p>
-              <button className="w-full py-3 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700">
+              <button 
+                onClick={() => handleDeleteBudget(overBudget[0].id)}
+                className="w-full py-3 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700"
+              >
                 Adjust Budget
               </button>
             </div>
           )}
+
+          {/* Warning Card */}
+          {warningBudget.length > 0 && overBudget.length === 0 && (
+            <div className="bg-yellow-50 p-8 rounded-xl border border-yellow-200">
+              <div className="flex items-center gap-2 text-yellow-600 mb-4">
+                <AlertCircle size={16} />
+                <span className="font-bold uppercase text-xs">Warning</span>
+              </div>
+              <h3 className="text-xl font-bold text-yellow-800 leading-tight">
+                {warningBudget[0].categoryName} near limit
+              </h3>
+              <p className="text-yellow-600 text-sm mb-4">
+                You've used {Math.round(warningBudget[0].percentageUsed)}% of your ${warningBudget[0].limitAmount.toLocaleString()} budget.
+              </p>
+            </div>
+          )}
         </div>
 
+        {/* Category Breakdown */}
         <h3 className="text-2xl font-bold text-emerald-600 mb-6">Category Breakdown</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {Array.isArray(budgets) && budgets.map((budget) => (
-            budget && <BudgetCard 
-              key={budget.id || Math.random()} 
-              budget={{
-                ...budget,
-                category: budget.categoryName,
-                limitAmount: budget.limitAmount || 0,
-                spentAmount: budget.spentAmount || 0,
-                remainingAmount: budget.remainingAmount || 0,
-                percentageUsed: budget.percentageUsed || 0,
-                status: budget.status || 'WITHIN_LIMIT'
-              }} 
+          {budgets.map((budget) => (
+            <BudgetCard 
+              key={budget.id} 
+              budget={budget}
+              onDelete={() => handleDeleteBudget(budget.id)}
             />
           ))}
           
@@ -327,20 +572,24 @@ const Budget = () => {
             onClick={() => setShowForm(true)}
             className="bg-gray-50 p-6 rounded-xl border-2 border-dashed border-gray-300 flex flex-col items-center justify-center gap-3 hover:bg-gray-100 transition-all"
           >
-            <div className="w-12 h-12 rounded-full bg-white border border-gray-200 flex items-center justify-center transition-transform">
+            <div className="w-12 h-12 rounded-full bg-white border border-gray-200 flex items-center justify-center transition-transform group-hover:scale-110">
               <Plus size={24} className="text-emerald-600" />
             </div>
             <span className="font-bold text-emerald-600">Add Category</span>
+            <span className="text-xs text-gray-400">Set budget limit for a category</span>
           </button>
         </div>
 
-        {/* Rest of the form and insights sections remain the same */}
+        {/* Add Budget Form Modal */}
         {showForm && (
           <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl max-w-md w-full shadow-2xl">
               <div className="flex justify-between items-center p-6 border-b border-gray-200">
                 <h3 className="text-2xl font-bold text-emerald-600">Add New Category</h3>
-                <button onClick={() => setShowForm(false)} className="p-1 hover:bg-gray-100 rounded-lg transition-colors">
+                <button 
+                  onClick={() => setShowForm(false)} 
+                  className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                >
                   <X size={24} className="text-gray-500" />
                 </button>
               </div>
@@ -358,7 +607,7 @@ const Budget = () => {
                     <option value="">Select a category</option>
                     {categories.map((category) => (
                       <option key={category.id} value={category.id}>
-                        {category.name}
+                        {category.icon && `${category.icon} `}{category.name}
                       </option>
                     ))}
                   </select>
@@ -373,16 +622,25 @@ const Budget = () => {
                     onChange={handleInputChange}
                     placeholder="0.00"
                     step="0.01"
+                    min="0"
                     required
                     className="w-full px-4 py-2 rounded-lg border border-gray-300 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900"
                   />
                 </div>
                 
                 <div className="flex gap-3 pt-4">
-                  <button type="button" onClick={() => setShowForm(false)} className="flex-1 px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors text-gray-700">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowForm(false)} 
+                    className="flex-1 px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors text-gray-700"
+                  >
                     Cancel
                   </button>
-                  <button type="submit" disabled={loading} className="flex-1 px-4 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 transition-opacity disabled:opacity-50">
+                  <button 
+                    type="submit" 
+                    disabled={loading} 
+                    className="flex-1 px-4 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
                     {loading ? 'Adding...' : 'Add Category'}
                   </button>
                 </div>
@@ -391,41 +649,38 @@ const Budget = () => {
           </div>
         )}
 
+        {/* Insights Section */}
         <div className="bg-white rounded-xl border border-gray-200 p-8 mt-10">
           <div className="flex flex-col md:flex-row gap-8 items-center">
             <div className="w-full md:w-1/2">
               <h3 className="text-xl font-bold text-emerald-600 mb-4">Spending Insights</h3>
               <p className="text-gray-600 mb-6">
-                You have {budgets.length} budget categories with a total limit of ${(summary.totalLimit || 0).toLocaleString()}.
-                You've utilized {Math.round(summary.overallPercentage || 0)}% of your total budget.
+                You have {budgets.length} budget categories with a total limit of ${summary.totalLimit.toLocaleString()}.
+                You've utilized {Math.round(summary.overallPercentage)}% of your total budget.
               </p>
               <div className="flex gap-4">
                 <div className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-bold">
-                  <TrendingDown size={14} /> {Math.round(summary.overallPercentage || 0)}% Used
+                  <TrendingDown size={14} /> {Math.round(summary.overallPercentage)}% Used
                 </div>
                 <div className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-bold">
-                  <PiggyBank size={14} /> Remaining: ${(summary.totalRemaining || 0).toLocaleString()}
+                  <PiggyBank size={14} /> Remaining: ${summary.totalRemaining.toLocaleString()}
                 </div>
               </div>
             </div>
             
             <div className="w-full md:w-1/2 relative h-48 flex items-end justify-between px-4 pb-4 bg-gray-50 rounded-xl">
-              {budgets.filter(b => b).slice(0, 7).map((budget, i) => {
-                const percentage = budget?.percentageUsed || 0;
-                const categoryName = budget?.categoryName || 'Unknown';
-                return (
-                  <div key={budget?.id || i} className="flex flex-col items-center gap-2">
-                    <div
-                      className="w-8 bg-emerald-200 rounded-t-lg transition-all hover:bg-emerald-300 cursor-pointer"
-                      style={{ height: `${Math.min(percentage, 100)}%`, minHeight: '4px' }}
-                      title={`${categoryName}: ${percentage.toFixed(1)}%`}
-                    ></div>
-                    <span className="text-xs text-gray-500">
-                      {categoryName.substring(0, 3)}
-                    </span>
-                  </div>
-                );
-              })}
+              {budgets.slice(0, 7).map((budget, i) => (
+                <div key={budget.id} className="flex flex-col items-center gap-2 flex-1">
+                  <div
+                    className="w-full max-w-[40px] bg-emerald-200 rounded-t-lg transition-all hover:bg-emerald-300 cursor-pointer"
+                    style={{ height: `${Math.min(budget.percentageUsed, 100)}%`, minHeight: '4px' }}
+                    title={`${budget.categoryName}: ${budget.percentageUsed.toFixed(1)}%`}
+                  />
+                  <span className="text-xs text-gray-500 truncate max-w-[50px] text-center">
+                    {budget.categoryName.substring(0, 3)}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>

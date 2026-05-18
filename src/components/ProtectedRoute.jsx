@@ -1,23 +1,41 @@
-// src/components/ProtectedRoute.js
+// ProtectedRoute.js
 import React from 'react';
-import { Navigate } from 'react-router-dom';
-// import { useAuth } from '../context/AuthContext';
+import { Navigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../authcontext/AuthContext';
 
-// import { useAuth } from '../authcontext/AuthContext';
-import { useAuth } from '../authcontext/AuthContext'
+const ProtectedRoute = ({ children, requiredRoles = [] }) => {
+  const { isAuthenticated, user, loading, hasRole } = useAuth();
+  const location = useLocation();
 
-const ProtectedRoute = ({ children }) => {
-  const { user, loading } = useAuth();
-  
   if (loading) {
+    // Show loading spinner or skeleton
     return (
-      <div className="flex items-center justify-center h-screen bg-surface">
-        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: '100vh' 
+      }}>
+        <div>Loading...</div>
       </div>
     );
   }
-  
-  return user ? children : <Navigate to="/login" replace />;
+
+  if (!isAuthenticated()) {
+    // Redirect to login but save the location they tried to access
+    return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+  }
+
+  // Check role-based access if roles are required
+  if (requiredRoles.length > 0) {
+    const hasRequiredRole = requiredRoles.some(role => hasRole(role));
+    if (!hasRequiredRole) {
+      // User doesn't have required role, redirect to unauthorized page or home
+      return <Navigate to="/unauthorized" replace />;
+    }
+  }
+
+  return children;
 };
 
 export default ProtectedRoute;

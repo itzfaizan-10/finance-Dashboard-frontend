@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/layout/Layout';
 import TransactionRow from '../components/TransactionRow';
 import TransactionForm from '../components/TransactionForm';
-import { Download, Plus, Calendar, Filter, ChevronLeft, ChevronRight, TrendingUp, AlertCircle } from 'lucide-react';
+import { Download, Plus, Calendar, Filter, ChevronLeft, ChevronRight, TrendingUp, AlertCircle, RefreshCw } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../authcontext/AuthContext';
 
@@ -36,15 +36,78 @@ const ID_TO_CATEGORY = {
 };
 
 const Transactions = () => {
-  const { user } = useAuth(); // ✅ Get user from auth
+  const { user, isAuthenticated, refreshToken, logout, getSessionStatus } = useAuth();
   const [transactions, setTransactions] = useState([]);
   const [filterType, setFilterType] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dateRange, setDateRange] = useState('last30');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [sessionInfo, setSessionInfo] = useState(null);
   const itemsPerPage = 8;
+
+  const backendUrl = import.meta.env.VITE_BACKEND_URL;
+
+  // ✅ Create axios instance with auth interceptor
+  const apiClient = useCallback(() => {
+    const token = localStorage.getItem("token");
+    const instance = axios.create({
+      baseURL: backendUrl,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` })
+      }
+    });
+
+    // Response interceptor for token refresh
+    instance.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        const originalRequest = error.config;
+        
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true;
+          
+          try {
+            const refreshed = await refreshToken();
+            if (refreshed) {
+              const newToken = localStorage.getItem("token");
+              originalRequest.headers.Authorization = `Bearer ${newToken}`;
+              return instance(originalRequest);
+            }
+          } catch (refreshError) {
+            logout();
+            window.location.href = '/login';
+            return Promise.reject(refreshError);
+          }
+        }
+        
+        return Promise.reject(error);
+      }
+    );
+    
+    return instance;
+  }, [backendUrl, refreshToken, logout]);
+
+  // ✅ Check session periodically
+  useEffect(() => {
+    const checkSession = () => {
+      const status = getSessionStatus();
+      setSessionInfo(status);
+      
+      if (status.isActive && status.remainingSeconds && status.remainingSeconds <= 300) {
+        console.warn(`⚠️ Session expires in ${Math.floor(status.remainingSeconds / 60)} minutes`);
+      }
+    };
+    
+    checkSession();
+    const interval = setInterval(checkSession, 60000);
+    
+    return () => clearInterval(interval);
+  }, [getSessionStatus]);
 
   // ✅ Get userId from user object or localStorage
   const getUserId = useCallback(() => {
@@ -55,43 +118,59 @@ const Transactions = () => {
     if (storedUser) {
       try {
         const parsedUser = JSON.parse(storedUser);
-        return parsedUser.userId || parsedUser.id || 1;
+        return parsedUser.userId || parsedUser.id;
       } catch (err) {
         console.error('Error parsing stored user:', err);
       }
     }
-    return 1; // Fallback, but should be dynamic
+    return null;
   }, [user]);
 
   // ✅ Fetch transactions with authentication
-  const fetchTransactions = useCallback(async () => {
-    setLoading(true);
+  const fetchTransactions = useCallback(async (showRefreshIndicator = false) => {
+    if (showRefreshIndicator) {
+      setIsRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
     
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
+      // Check authentication
+      if (!isAuthenticated || !isAuthenticated()) {
         setError('Authentication required. Please login again.');
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 2000);
         setLoading(false);
+        setIsRefreshing(false);
         return;
       }
 
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
       const userId = getUserId();
-      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      if (!userId) {
+        throw new Error('User ID not found');
+      }
       
       if (!backendUrl) {
-        setError('Backend URL not configured');
-        setLoading(false);
-        return;
+        throw new Error('Backend URL not configured');
+      }
+
+      // Check token expiry before making request
+      const sessionStatus = getSessionStatus();
+      if (sessionStatus?.remainingSeconds && sessionStatus.remainingSeconds <= 0) {
+        throw new Error('Token expired');
       }
 
       console.log(`Fetching transactions for user: ${userId}`);
       
-      const response = await axios.get(`${backendUrl}/api/transaction/users/${userId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const client = apiClient();
+      const response = await client.get(`/api/transaction/users/${userId}`);
       
       console.log('Fetched transactions:', response.data);
       
@@ -116,9 +195,11 @@ const Transactions = () => {
           description: t.description || t.merchant || 'No description',
           category: t.category || ID_TO_CATEGORY[t.categoryId] || 'Uncategorized',
           type: t.type || (t.amount > 0 ? 'INCOME' : 'EXPENSE'),
-          amount: Math.abs(t.amount || 0),
+          amount: Math.abs(Number(t.amount) || 0),
           transactiondate: t.transactiondate || t.date || new Date().toISOString().split('T')[0],
-          categoryId: t.categoryId
+          categoryId: t.categoryId,
+          createdAt: t.createdAt,
+          updatedAt: t.updatedAt
         }));
       
       setTransactions(safeTransactions);
@@ -126,29 +207,44 @@ const Transactions = () => {
     } catch (error) {
       console.error('Error fetching transactions:', error);
       
-      if (error.response) {
-        // Server responded with error
-        if (error.response.status === 401) {
-          setError('Session expired. Please login again.');
-          setTimeout(() => {
-            window.location.href = '/login';
-          }, 2000);
-        } else if (error.response.status === 404) {
-          setError('No transactions found. Create your first transaction!');
-          setTransactions([]);
-        } else {
-          setError(error.response.data?.message || 'Failed to load transactions');
-        }
-      } else if (error.request) {
-        setError('Unable to connect to server. Please check if backend is running.');
+      if (error.response?.status === 401) {
+        setError('Session expired. Please login again.');
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 2000);
+      } else if (error.response?.status === 404) {
+        setError('No transactions found. Create your first transaction!');
+        setTransactions([]);
+      } else if (error.response?.status === 403) {
+        setError('You don\'t have permission to view these transactions.');
+      } else if (error.code === 'ERR_NETWORK') {
+        setError('Unable to connect to server. Please check your internet connection.');
       } else {
-        setError('An unexpected error occurred.');
+        setError(error.response?.data?.message || error.message || 'Failed to load transactions');
       }
       setTransactions([]);
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
+      setInitialLoading(false);
     }
-  }, [getUserId]);
+  }, [backendUrl, apiClient, isAuthenticated, getUserId, getSessionStatus]);
+
+  // Auto-refresh transactions every 5 minutes
+  useEffect(() => {
+    fetchTransactions();
+    
+    const intervalId = setInterval(() => {
+      if (isAuthenticated && isAuthenticated()) {
+        console.log("🔄 Auto-refreshing transactions...");
+        fetchTransactions(true);
+      }
+    }, 300000);
+    
+    return () => clearInterval(intervalId);
+  }, [fetchTransactions, isAuthenticated]);
 
   // ✅ Add new transaction with validation
   const handleNewTransaction = async (transaction) => {
@@ -170,17 +266,20 @@ const Transactions = () => {
       return;
     }
     
+    if (!isAuthenticated || !isAuthenticated()) {
+      alert('Session expired. Please login again.');
+      window.location.href = '/login';
+      return;
+    }
+    
     try {
       const token = localStorage.getItem('token');
       if (!token) {
-        alert('Authentication required. Please login again.');
-        window.location.href = '/login';
-        return;
+        throw new Error('No authentication token');
       }
       
       const categoryId = CATEGORY_TO_ID[transaction.category];
       
-      // ✅ Check if category mapping exists
       if (!categoryId) {
         console.error('Unknown category:', transaction.category);
         alert(`Unknown category: ${transaction.category}. Please select a valid category.`);
@@ -188,7 +287,9 @@ const Transactions = () => {
       }
       
       const userId = getUserId();
-      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      if (!userId) {
+        throw new Error('User ID not found');
+      }
       
       const payload = {
         amount: Number(transaction.amount),
@@ -202,12 +303,8 @@ const Transactions = () => {
       
       console.log('Sending payload:', payload);
       
-      const response = await axios.post(`${backendUrl}/api/transaction/${userId}`, payload, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const client = apiClient();
+      const response = await client.post(`/api/transaction/${userId}`, payload);
       
       console.log('Transaction saved:', response.data);
       
@@ -215,14 +312,19 @@ const Transactions = () => {
       await fetchTransactions();
       setShowForm(false);
       
-      // ✅ Show success message (optional)
-      // alert('Transaction created successfully!');
+      // Optional: Show success toast/notification
+      // showSuccess('Transaction created successfully!');
       
     } catch (error) {
       console.error('Error saving transaction:', error);
       
       let errorMessage = 'Failed to create transaction. ';
-      if (error.response) {
+      if (error.response?.status === 401) {
+        errorMessage = 'Session expired. Please login again.';
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 2000);
+      } else if (error.response) {
         errorMessage += error.response.data?.message || `Server error: ${error.response.status}`;
       } else if (error.request) {
         errorMessage += 'Unable to connect to server.';
@@ -234,48 +336,75 @@ const Transactions = () => {
     }
   };
 
+  // ✅ Delete transaction
+  const handleDeleteTransaction = async (transactionId) => {
+    if (!confirm('Are you sure you want to delete this transaction?')) return;
+    
+    if (!isAuthenticated || !isAuthenticated()) {
+      alert('Session expired. Please login again.');
+      window.location.href = '/login';
+      return;
+    }
+    
+    try {
+      const userId = getUserId();
+      const client = apiClient();
+      await client.delete(`/api/transaction/${userId}/${transactionId}`);
+      
+      // Refresh transactions
+      await fetchTransactions();
+      
+      // Optional: Show success message
+      // showSuccess('Transaction deleted successfully!');
+      
+    } catch (error) {
+      console.error('Error deleting transaction:', error);
+      alert('Failed to delete transaction. Please try again.');
+    }
+  };
+
   // ✅ Export to CSV with proper formatting
   const exportToCSV = () => {
     try {
-      if (transactions.length === 0) {
+      if (filtered.length === 0) {
         alert('No transactions to export');
         return;
       }
       
       const headers = ['Date', 'Description', 'Category', 'Type', 'Amount'];
-      const csvData = transactions.map(t => [
+      const csvData = filtered.map(t => [
         t.transactiondate,
-        `"${t.description.replace(/"/g, '""')}"`, // Escape quotes
+        `"${t.description.replace(/"/g, '""')}"`,
         t.category,
         t.type,
-        t.amount
+        t.amount.toFixed(2)
       ]);
       
       const csvContent = [headers, ...csvData].map(row => row.join(',')).join('\n');
-      const blob = new Blob([csvContent], { type: 'text/csv' });
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `transactions_${new Date().toISOString().split('T')[0]}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `transactions_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       URL.revokeObjectURL(url);
       
-      console.log('CSV exported successfully');
+      console.log(`Exported ${filtered.length} transactions to CSV`);
     } catch (error) {
       console.error('Error exporting CSV:', error);
       alert('Failed to export CSV');
     }
   };
 
-  useEffect(() => {
-    fetchTransactions();
-  }, [fetchTransactions]);
+  const handleManualRefresh = async () => {
+    await fetchTransactions(true);
+  };
 
-  // ✅ Filter transactions with safe type checking
+  // ✅ Filter transactions
   const filtered = React.useMemo(() => {
-    let filteredData = transactions;
+    let filteredData = [...transactions];
     
     // Filter by type
     if (filterType !== 'all') {
@@ -326,6 +455,26 @@ const Transactions = () => {
     return { income, expense, balance: income - expense };
   }, [filtered]);
 
+  // Loading state
+  if (initialLoading) {
+    return (
+      <Layout>
+        <div className="p-8 pt-24 flex justify-center items-center min-h-screen">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto"></div>
+            <p className="mt-4 text-gray-500">Loading transactions...</p>
+            {sessionInfo?.remainingSeconds && (
+              <p className="mt-2 text-xs text-gray-400">
+                Session expires in {Math.floor(sessionInfo.remainingSeconds / 60)} minutes
+              </p>
+            )}
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  // Error state
   if (error && transactions.length === 0) {
     return (
       <Layout>
@@ -336,9 +485,10 @@ const Transactions = () => {
             <p className="text-sm mb-4">{error}</p>
             <div className="flex gap-3 justify-center">
               <button 
-                onClick={fetchTransactions} 
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                onClick={handleManualRefresh} 
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors inline-flex items-center gap-2"
               >
+                <RefreshCw size={16} />
                 Retry
               </button>
               <button 
@@ -357,23 +507,57 @@ const Transactions = () => {
   return (
     <Layout>
       <div className="p-8 pt-24 bg-white min-h-screen">
+        
+        {/* Session warning banner */}
+        {sessionInfo?.remainingSeconds && sessionInfo.remainingSeconds <= 600 && (
+          <div className="mb-6 bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-lg flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <span>⏰</span>
+              <span className="text-sm">
+                Your session will expire in {Math.floor(sessionInfo.remainingSeconds / 60)} minutes.
+                {sessionInfo.remainingSeconds <= 300 && ' Please save your work!'}
+              </span>
+            </div>
+            <button 
+              onClick={logout}
+              className="text-sm bg-yellow-100 px-3 py-1 rounded hover:bg-yellow-200"
+            >
+              Extend Session
+            </button>
+          </div>
+        )}
+        
         {/* Header */}
         <div className="mb-10 flex flex-col md:flex-row justify-between gap-6">
           <div>
             <h2 className="text-3xl font-extrabold tracking-tight text-gray-900">Transaction History</h2>
             <p className="text-gray-500">A curated record of your financial movements.</p>
+            {transactions.length > 0 && (
+              <p className="text-xs text-gray-400 mt-1">
+                {filtered.length} of {transactions.length} transactions shown
+              </p>
+            )}
           </div>
           <div className="flex gap-3">
             <button 
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+              title="Refresh transactions"
+            >
+              <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+            <button 
               onClick={exportToCSV} 
-              disabled={transactions.length === 0}
+              disabled={filtered.length === 0}
               className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <Download size={16} /> Export CSV
             </button>
             <button 
               onClick={() => setShowForm(true)} 
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-colors shadow-md hover:shadow-lg"
             >
               <Plus size={16} /> New Transaction
             </button>
@@ -384,16 +568,16 @@ const Transactions = () => {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <div className="bg-gradient-to-r from-emerald-50 to-green-50 p-4 rounded-xl border border-emerald-100">
             <p className="text-sm text-gray-600 mb-1">Total Income</p>
-            <p className="text-2xl font-bold text-emerald-600">${stats.income.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-emerald-600">${stats.income.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
           </div>
           <div className="bg-gradient-to-r from-red-50 to-orange-50 p-4 rounded-xl border border-red-100">
             <p className="text-sm text-gray-600 mb-1">Total Expenses</p>
-            <p className="text-2xl font-bold text-red-600">${stats.expense.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-red-600">${stats.expense.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
           </div>
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-xl border border-blue-100">
             <p className="text-sm text-gray-600 mb-1">Net Balance</p>
             <p className={`text-2xl font-bold ${stats.balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-              ${stats.balance.toLocaleString()}
+              ${stats.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
           </div>
         </div>
@@ -411,7 +595,10 @@ const Transactions = () => {
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                {type.charAt(0).toUpperCase() + type.slice(1)} ({transactions.filter(t => type === 'all' ? true : (t.type?.toLowerCase() === type)).length})
+                {type.charAt(0).toUpperCase() + type.slice(1)} 
+                <span className="ml-1 text-xs opacity-75">
+                  ({type === 'all' ? transactions.length : transactions.filter(t => t.type?.toLowerCase() === type).length})
+                </span>
               </button>
             ))}
           </div>
@@ -448,7 +635,7 @@ const Transactions = () => {
                   <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Category</th>
                   <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Type</th>
                   <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500 text-right">Amount</th>
-                  <th></th>
+                  <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -465,13 +652,17 @@ const Transactions = () => {
                   <tr>
                     <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
                       {filterType !== 'all' 
-                        ? `No ${filterType} transactions found.` 
+                        ? `No ${filterType} transactions found in this period.` 
                         : 'No transactions found. Click "New Transaction" to add one.'}
                     </td>
                   </tr>
                 ) : (
                   paginated.map((tx, index) => (
-                    <TransactionRow key={tx.id || index} transaction={tx} />
+                    <TransactionRow 
+                      key={tx.id || index} 
+                      transaction={tx}
+                      onDelete={() => handleDeleteTransaction(tx.id)}
+                    />
                   ))
                 )}
               </tbody>
@@ -546,10 +737,10 @@ const Transactions = () => {
             </div>
             <button 
               onClick={exportToCSV}
-              disabled={transactions.length === 0}
+              disabled={filtered.length === 0}
               className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
             >
-              Download Report
+              Download Report ({filtered.length} transactions)
             </button>
           </div>
         </div>

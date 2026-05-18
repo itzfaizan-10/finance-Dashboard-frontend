@@ -1,4 +1,4 @@
-// src/pages/Register.js
+// src/pages/Register.js - Simplified version
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../authcontext/AuthContext';
@@ -10,26 +10,15 @@ const Register = () => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  // ✅ Password strength validation
-  const validatePassword = (pass) => {
-    const errors = [];
-    if (pass.length < 6) errors.push('Password must be at least 6 characters');
-    if (!/[A-Z]/.test(pass)) errors.push('Password must contain at least one uppercase letter');
-    if (!/[0-9]/.test(pass)) errors.push('Password must contain at least one number');
-    return errors;
-  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
 
-    // ✅ Validation checks
+    // Simple validation
     if (!name.trim()) {
       setError('Please enter your full name');
       return;
@@ -50,22 +39,14 @@ const Register = () => {
       return;
     }
 
-    // ✅ Password strength validation
-    const passwordErrors = validatePassword(password);
-    if (passwordErrors.length > 0) {
-      setError(passwordErrors[0]);
-      return;
-    }
-
-    if (password !== confirm) {
-      setError("Passwords don't match");
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters');
       return;
     }
 
     setLoading(true);
     
     try {
-      // ✅ Check if register function exists
       if (!register) {
         throw new Error('Authentication service not available');
       }
@@ -73,13 +54,9 @@ const Register = () => {
       const result = await register(name, email, password);
       console.log("Registration result => ", result);
 
-      // ✅ Check if registration was successful
       if (result && result.success) {
         console.log("Registration successful, redirecting...");
-        // AuthContext will handle redirect to home page
-        // No need to navigate here if AuthContext already redirects
       } else {
-        // ✅ Show error message from result
         setError(result?.message || "Registration failed");
         setLoading(false);
       }
@@ -90,7 +67,7 @@ const Register = () => {
     }
   };
 
-  // ✅ Check if AuthContext is available
+  // Check if AuthContext is available
   if (!register) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50">
@@ -161,67 +138,29 @@ const Register = () => {
               </div>
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-700">Password</label>
-                <div className="relative">
-                  <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-12 pr-12 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900"
-                    placeholder="••••••••"
-                    disabled={loading}
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  >
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
+            <div>
+              <label className="block text-sm font-medium mb-2 text-gray-700">Password</label>
+              <div className="relative">
+                <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full pl-12 pr-12 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900"
+                  placeholder="••••••••"
+                  disabled={loading}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-700">Confirm Password</label>
-                <div className="relative">
-                  <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-                  <input
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    value={confirm}
-                    onChange={(e) => setConfirm(e.target.value)}
-                    className="w-full pl-12 pr-12 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900"
-                    placeholder="••••••••"
-                    disabled={loading}
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  >
-                    {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              </div>
+              <p className="text-xs text-gray-400 mt-1">Try to make it strong!</p>
             </div>
-
-            {/* Password requirements hint */}
-            {password && (
-              <div className="text-xs space-y-1">
-                <p className={`${password.length >= 6 ? 'text-green-600' : 'text-gray-400'}`}>
-                  ✓ At least 6 characters
-                </p>
-                <p className={`{/[A-Z]/.test(password) ? 'text-green-600' : 'text-gray-400'}`}>
-                  ✓ At least one uppercase letter
-                </p>
-                <p className={`{/[0-9]/.test(password) ? 'text-green-600' : 'text-gray-400'}`}>
-                  ✓ At least one number
-                </p>
-              </div>
-            )}
             
             <button
               type="submit"
