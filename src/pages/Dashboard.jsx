@@ -274,17 +274,9 @@ const Dashboard = () => {
 
         {/* Recent Transactions */}
         <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
-          <div className="p-6 pb-4 flex justify-between items-center flex-wrap gap-4">
-            <div>
-              <h3 className="text-xl font-semibold text-gray-900">Recent Transactions</h3>
-              <p className="text-sm text-gray-500 mt-1">Your latest transactions across all accounts</p>
-            </div>
-            <button 
-              onClick={() => window.location.href = '/transactions'}
-              className="text-emerald-600 font-medium text-sm hover:text-emerald-700 transition-colors"
-            >
-              VIEW ALL ({dashboardData.recentTransactions.length}) TRANSACTIONS →
-            </button>
+          <div className="p-6 pb-4">
+            <h3 className="text-xl font-semibold text-gray-900">Recent Transactions</h3>
+            <p className="text-sm text-gray-500 mt-1">Your latest transactions across all accounts</p>
           </div>
           
           <div className="overflow-x-auto">

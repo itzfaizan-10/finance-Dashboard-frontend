@@ -250,31 +250,6 @@ const Transactions = () => {
     }
   };
 
-  // Delete transaction
-  const handleDeleteTransaction = async (transactionId) => {
-    if (!confirm('Are you sure you want to delete this transaction?')) return;
-    
-    const token = localStorage.getItem('token');
-    if (!token) {
-      alert('Session expired. Please login again.');
-      window.location.href = '/login';
-      return;
-    }
-    
-    try {
-      const userId = getUserId();
-      const client = apiClient();
-      await client.delete(`/api/transaction/${userId}/${transactionId}`);
-      
-      // Refresh transactions
-      await fetchTransactions();
-      
-    } catch (error) {
-      console.error('Error deleting transaction:', error);
-      alert('Failed to delete transaction. Please try again.');
-    }
-  };
-
   // Filter transactions
   const filtered = React.useMemo(() => {
     let filteredData = [...transactions];
@@ -449,13 +424,12 @@ const Transactions = () => {
                   <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Category</th>
                   <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500">Type</th>
                   <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500 text-right">Amount</th>
-                  <th className="px-6 py-4 text-xs font-bold uppercase text-gray-500 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {loading && transactions.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan="5" className="px-6 py-12 text-center text-gray-500">
                       <div className="flex justify-center">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
                       </div>
@@ -464,7 +438,7 @@ const Transactions = () => {
                   </tr>
                 ) : paginated.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan="5" className="px-6 py-12 text-center text-gray-500">
                       {filterType !== 'all' 
                         ? `No ${filterType} transactions found in this period.` 
                         : 'No transactions found. Click "New Transaction" to add one.'}
@@ -475,7 +449,6 @@ const Transactions = () => {
                     <TransactionRow 
                       key={tx.id || index} 
                       transaction={tx}
-                      onDelete={() => handleDeleteTransaction(tx.id)}
                     />
                   ))
                 )}

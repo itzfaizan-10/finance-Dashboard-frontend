@@ -85,15 +85,21 @@ const Budget = () => {
     return category ? category.name : null;
   }, [categories]);
 
-  // Get color based on percentage
-  const getPercentageColor = (percentage) => {
-    if (percentage >= 100) return 'bg-red-500';
-    if (percentage >= 80) return 'bg-yellow-500';
-    if (percentage >= 50) return 'bg-emerald-500';
-    return 'bg-green-500';
-  };
+  // Array of distinct, high-contrast bar colors for the graph
+  const barColors = [
+    'bg-blue-500',
+    'bg-purple-500',
+    'bg-pink-500',
+    'bg-orange-500',
+    'bg-teal-500',
+    'bg-indigo-500',
+    'bg-rose-500',
+    'bg-amber-500',
+    'bg-cyan-500',
+    'bg-violet-500'
+  ];
 
-  // Get border color based on percentage
+  // Get border color based on percentage (keeping for reference but not used in graph)
   const getBorderColor = (percentage) => {
     if (percentage >= 100) return 'border-red-400';
     if (percentage >= 80) return 'border-yellow-400';
@@ -568,8 +574,8 @@ const Budget = () => {
           </div>
         )}
 
-        {/* Insights Section with colored graph bars */}
-        <div className="bg-white rounded-xl border border-emerald-100 p-8 mt-10 shadow-sm">
+        {/* Insights Section with colored graph bars - UPDATED: added border and distinct bar colors */}
+        <div className="bg-white rounded-xl border border-gray-300 p-8 mt-10 shadow-sm">
           <div className="flex flex-col md:flex-row gap-8 items-center">
             <div className="w-full md:w-1/2">
               <h3 className="text-xl font-bold text-emerald-600 mb-4">Spending Insights</h3>
@@ -587,16 +593,19 @@ const Budget = () => {
               </div>
             </div>
             
-            <div className="w-full md:w-1/2 relative h-48 flex items-end justify-between px-4 pb-4 bg-emerald-50/30 rounded-xl">
+            {/* Graph container with border and contrasting bar colors */}
+            <div className="w-full md:w-1/2 relative h-48 flex items-end justify-between px-4 pb-4 bg-gray-50 rounded-xl border border-gray-300 shadow-inner">
               {budgets.slice(0, 7).map((budget, i) => {
                 const percentage = budget.percentageUsed;
-                const barColor = getPercentageColor(percentage);
-                const borderColor = getBorderColor(percentage);
+                // Use a distinct color from the array based on index
+                const barColor = barColors[i % barColors.length];
+                // Add a subtle border to each bar for definition
+                const borderColor = 'border border-gray-400';
                 
                 return (
                   <div key={budget.id} className="flex flex-col items-center gap-2 flex-1">
                     <div
-                      className={`w-full max-w-[40px] ${barColor} rounded-t-lg transition-all hover:opacity-80 cursor-pointer shadow-sm ${borderColor} border`}
+                      className={`w-full max-w-[40px] ${barColor} ${borderColor} rounded-t-lg transition-all hover:opacity-80 cursor-pointer`}
                       style={{ height: `${Math.min(percentage, 100)}%`, minHeight: '4px' }}
                       title={`${budget.categoryName}: ${percentage.toFixed(1)}%`}
                     />
