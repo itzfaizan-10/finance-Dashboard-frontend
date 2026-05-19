@@ -1,4 +1,4 @@
-// src/pages/Register.js - Simplified version
+// src/pages/Register.js
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../authcontext/AuthContext';
@@ -34,15 +34,14 @@ const Register = () => {
       return;
     }
 
+    // ✅ Removed password length restriction - only check if not empty
     if (!password) {
       setError('Please enter a password');
       return;
     }
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
-      return;
-    }
+    // ✅ No length validation - accept any password length
+    // Password can be 1 character or more
 
     setLoading(true);
     
@@ -54,12 +53,15 @@ const Register = () => {
       const result = await register(name, email, password);
       console.log("Registration result => ", result);
 
-      if (result && result.success) {
-        console.log("Registration successful, redirecting...");
-      } else {
-        setError(result?.message || "Registration failed");
+      // ✅ Check if registration was successful
+      // AuthContext register redirects on success, so we just need to check if it succeeded
+      if (result && result.success === false) {
+        setError(result.message || "Registration failed");
         setLoading(false);
       }
+      // If success is true or no error, AuthContext will handle redirect
+      // No need to navigate here as AuthContext does navigate('/')
+      
     } catch (err) {
       console.error("Registration error:", err);
       setError(err.response?.data?.message || err.message || "An unexpected error occurred");
@@ -147,7 +149,7 @@ const Register = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full pl-12 pr-12 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900"
-                  placeholder="••••••••"
+                  placeholder="Enter password (any length)"
                   disabled={loading}
                   required
                 />
@@ -159,7 +161,7 @@ const Register = () => {
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
-              <p className="text-xs text-gray-400 mt-1">Try to make it strong!</p>
+              <p className="text-xs text-gray-400 mt-1">Password can be any length (no minimum required)</p>
             </div>
             
             <button

@@ -238,6 +238,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+ // No length restriction
 
 const register = async (name, email, password) => {
   const backendUrl = getBackendUrl();

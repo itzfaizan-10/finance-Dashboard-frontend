@@ -18,6 +18,7 @@ function App() {
           {/* Public routes */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+
           
           {/* Protected routes */}
           <Route path="/" element={
@@ -38,11 +39,7 @@ function App() {
             </ProtectedRoute>
           } />
           
-          <Route path="/profile" element={
-            <ProtectedRoute>
-              <Profile />
-            </ProtectedRoute>
-          } />
+          <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
           
           {/* Catch all route - redirect to home */}
           <Route path="*" element={<Navigate to="/" replace />} />
