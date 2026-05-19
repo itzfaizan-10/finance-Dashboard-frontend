@@ -7,7 +7,7 @@ import axios from 'axios';
 import { useAuth } from '../authcontext/AuthContext';
 
 const Budget = () => {
-  const { user, isAuthenticated, refreshToken, logout, getSessionStatus } = useAuth();
+  const { user, isAuthenticated, logout } = useAuth();
   const [budgets, setBudgets] = useState([]);
   const [categories, setCategories] = useState([]);
   const [showForm, setShowForm] = useState(false);
@@ -15,7 +15,6 @@ const Budget = () => {
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [sessionInfo, setSessionInfo] = useState(null);
   const [summary, setSummary] = useState({
     totalSpent: 0,
     totalLimit: 0,
@@ -29,57 +28,27 @@ const Budget = () => {
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
   
-  // ✅ Get user ID from auth context (assuming user object has userId)
-  const getUserId = useCallback(() => {
-    if (!user) return null;
-    return user.userId || user.id || user.sub;
-  }, [user]);
-
-  // ✅ Create axios instance with auth interceptor
+  // Create axios instance with auth header
   const apiClient = useCallback(() => {
     const token = localStorage.getItem("token");
-    const instance = axios.create({
+    return axios.create({
       baseURL: backendUrl,
       headers: {
         'Content-Type': 'application/json',
         ...(token && { Authorization: `Bearer ${token}` })
       }
     });
+  }, [backendUrl]);
 
-    // Response interceptor for token refresh
-    instance.interceptors.response.use(
-      (response) => response,
-      async (error) => {
-        const originalRequest = error.config;
-        
-        if (error.response?.status === 401 && !originalRequest._retry) {
-          originalRequest._retry = true;
-          
-          try {
-            const refreshed = await refreshToken();
-            if (refreshed) {
-              const newToken = localStorage.getItem("token");
-              originalRequest.headers.Authorization = `Bearer ${newToken}`;
-              return instance(originalRequest);
-            }
-          } catch (refreshError) {
-            logout();
-            window.location.href = '/login';
-            return Promise.reject(refreshError);
-          }
-        }
-        
-        return Promise.reject(error);
-      }
-    );
-    
-    return instance;
-  }, [backendUrl, refreshToken, logout]);
+  // Get user ID from auth context
+  const getUserId = useCallback(() => {
+    if (!user) return null;
+    return user.userId || user.id || user.sub;
+  }, [user]);
 
-  // ✅ Categories mapping (could also be fetched from backend)
+  // Fetch categories
   const fetchCategories = useCallback(async () => {
     try {
-      // Try to fetch from backend first
       const client = apiClient();
       try {
         const response = await client.get('/api/categories');
@@ -117,24 +86,7 @@ const Budget = () => {
     return category ? category.name : null;
   }, [categories]);
 
-  // ✅ Check session periodically
-  useEffect(() => {
-    const checkSession = () => {
-      const status = getSessionStatus();
-      setSessionInfo(status);
-      
-      if (status.isActive && status.remainingSeconds && status.remainingSeconds <= 300) {
-        console.warn(`⚠️ Budget page - Session expires in ${Math.floor(status.remainingSeconds / 60)} minutes`);
-      }
-    };
-    
-    checkSession();
-    const interval = setInterval(checkSession, 60000);
-    
-    return () => clearInterval(interval);
-  }, [getSessionStatus]);
-
-  // ✅ Fetch budgets with authentication
+  // Fetch budgets with authentication
   const fetchBudgets = useCallback(async (showRefreshIndicator = false) => {
     if (showRefreshIndicator) {
       setIsRefreshing(true);
@@ -145,15 +97,9 @@ const Budget = () => {
     setError(null);
     
     try {
-      // Check authentication first
-      if (!isAuthenticated()) {
-        setError("Your session has expired. Please login again.");
-        setTimeout(() => {
-          window.location.href = '/login';
-        }, 2000);
-        setLoading(false);
-        setIsRefreshing(false);
-        return;
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error("No authentication token found");
       }
       
       const userId = getUserId();
@@ -268,27 +214,28 @@ const Budget = () => {
       setIsRefreshing(false);
       setInitialLoading(false);
     }
-  }, [backendUrl, apiClient, isAuthenticated, getUserId, getCategoryName]);
+  }, [backendUrl, apiClient, getUserId, getCategoryName]);
 
   // Auto-refresh budgets every 5 minutes
   useEffect(() => {
     fetchBudgets();
     
     const intervalId = setInterval(() => {
-      if (isAuthenticated()) {
-        console.log("🔄 Auto-refreshing budgets...");
+      const token = localStorage.getItem('token');
+      if (token) {
+        console.log("Auto-refreshing budgets...");
         fetchBudgets(true);
       }
     }, 300000);
     
     return () => clearInterval(intervalId);
-  }, [fetchBudgets, isAuthenticated]);
+  }, [fetchBudgets]);
 
   useEffect(() => {
     fetchCategories();
   }, [fetchCategories]);
 
-  // ✅ Calculate over budget categories safely
+  // Calculate over budget categories safely
   const overBudget = budgets.filter(b => b && b.spentAmount > b.limitAmount);
   const warningBudget = budgets.filter(b => b && b.percentageUsed >= 80 && b.percentageUsed < 100);
 
@@ -308,7 +255,8 @@ const Budget = () => {
       return;
     }
     
-    if (!isAuthenticated()) {
+    const token = localStorage.getItem('token');
+    if (!token) {
       alert("Your session has expired. Please login again.");
       window.location.href = '/login';
       return;
@@ -364,7 +312,8 @@ const Budget = () => {
   const handleDeleteBudget = async (budgetId) => {
     if (!confirm('Are you sure you want to delete this budget category?')) return;
     
-    if (!isAuthenticated()) {
+    const token = localStorage.getItem('token');
+    if (!token) {
       alert("Session expired. Please login again.");
       window.location.href = '/login';
       return;
@@ -400,11 +349,6 @@ const Budget = () => {
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto"></div>
             <p className="mt-4 text-gray-500">Loading budgets...</p>
-            {sessionInfo?.remainingSeconds && (
-              <p className="mt-2 text-xs text-gray-400">
-                Session expires in {Math.floor(sessionInfo.remainingSeconds / 60)} minutes
-              </p>
-            )}
           </div>
         </div>
       </Layout>
@@ -444,26 +388,6 @@ const Budget = () => {
   return (
     <Layout>
       <div className="p-8 pt-24 bg-white min-h-screen">
-        
-        {/* Session warning banner */}
-        {sessionInfo?.remainingSeconds && sessionInfo.remainingSeconds <= 600 && (
-          <div className="mb-6 bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-lg flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <span>⏰</span>
-              <span className="text-sm">
-                Your session will expire in {Math.floor(sessionInfo.remainingSeconds / 60)} minutes.
-                {sessionInfo.remainingSeconds <= 300 && ' Please save your work!'}
-              </span>
-            </div>
-            <button 
-              onClick={logout}
-              className="text-sm bg-yellow-100 px-3 py-1 rounded hover:bg-yellow-200"
-            >
-              Extend Session
-            </button>
-          </div>
-        )}
-        
         {/* Header with refresh button */}
         <div className="mb-10 flex justify-between items-start">
           <div>

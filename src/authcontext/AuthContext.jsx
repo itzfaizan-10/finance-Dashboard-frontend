@@ -238,68 +238,89 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const register = async (name, email, password) => {
-    const backendUrl = getBackendUrl();
-    console.log('Register attempt for:', { backendUrl });
+
+const register = async (name, email, password) => {
+  const backendUrl = getBackendUrl();
+  console.log('Register attempt for:', { backendUrl });
+  
+  try {
+    setError(null);
+    setLoading(true);
+    console.log('Register attempt for:', { name, email });
     
-    try {
-      setError(null);
-      setLoading(true);
-      console.log('Register attempt for:', { name, email });
-      
-      const response = await axios.post(`${backendUrl}/api/auth/signup`, {
-        username: name,
-        password,
-        email
-      });
-      
-      if (response.status === 200 || response.status === 201) {
-        const token = response.data.token || response.data.jwt || response.data.accessToken;
-        const userId = response.data.userId || response.data.id;
-        const userEmail = response.data.email || email;
-        const userName = response.data.name || name;
-        
-        const finalToken = typeof token === 'string' ? token : token?.token;
-      
-        if (!finalToken) {
-          setError("Invalid server response - no token received");
-          setLoading(false);
-          return { success: false, message: "Invalid server response" };
-        }
-        
-        const userData = {
-          email: userEmail,
-          name: userName,
-          userId: userId,
-          roles: ['USER']
-        };
-        
-        saveUserData(userData, finalToken);
-        setLoading(false);
-        
-        // Use navigate instead of window.location
-        navigate('/');
-        
-        return { success: true, message: "Registration successful" };
-      } else {
-        setLoading(false);
-        return { success: false, message: "Registration failed" };
-      }
-    } catch (error) {
-      console.error("Registration error:", error);
-      let errorMessage = "Registration failed";
-      if (error.code === 'ERR_NETWORK') {
-        errorMessage = `Cannot connect to backend at ${backendUrl}`;
-      } else if (error.response?.status === 409) {
-        errorMessage = "Email already exists";
-      } else if (error.response?.data?.message) {
-        errorMessage = error.response.data.message;
-      }
-      setError(errorMessage);
+    // Only check if password is not empty
+    if (!password || password.trim() === '') {
+      setError("Password cannot be empty");
       setLoading(false);
-      return { success: false, message: errorMessage };
+      return { success: false, message: "Password cannot be empty" };
     }
-  };
+    
+    // Proceed with registration
+    const response = await axios.post(`${backendUrl}/api/auth/signup`, {
+      username: name,
+      password: password,
+      email: email
+    });
+    
+    if (response.status === 200 || response.status === 201) {
+      const token = response.data.token || response.data.jwt || response.data.accessToken;
+      const userId = response.data.userId || response.data.id;
+      const userEmail = response.data.email || email;
+      const userName = response.data.name || name;
+      
+      const finalToken = typeof token === 'string' ? token : token?.token;
+    
+      if (!finalToken) {
+        setError("Invalid server response - no token received");
+        setLoading(false);
+        return { success: false, message: "Invalid server response" };
+      }
+      
+      const userData = {
+        email: userEmail,
+        name: userName,
+        userId: userId,
+        roles: ['USER']
+      };
+      
+      saveUserData(userData, finalToken);
+      setLoading(false);
+      
+      navigate('/');
+      
+      return { success: true, message: "Registration successful" };
+    } else {
+      setLoading(false);
+      return { success: false, message: "Registration failed" };
+    }
+  } catch (error) {
+    console.error("Registration error:", error);
+    let errorMessage = "Registration failed";
+    
+    if (error.code === 'ERR_NETWORK') {
+      errorMessage = `Cannot connect to backend at ${backendUrl}`;
+    } 
+    // ✅ Check for 409 Conflict - User already exists
+    else if (error.response?.status === 409) {
+      errorMessage = "User already exists with this email. Please login instead.";
+    } 
+    else if (error.response?.status === 400) {
+      if (error.response?.data?.message?.includes("password")) {
+        errorMessage = error.response.data.message;
+      } else {
+        errorMessage = error.response.data.message || "Invalid registration data";
+      }
+    } 
+    else if (error.response?.data?.message) {
+      errorMessage = error.response.data.message;
+    }
+    
+    setError(errorMessage);
+    setLoading(false);
+    return { success: false, message: errorMessage };
+  }
+};
+
 
   const logout = () => {
     console.log("Logging out...");

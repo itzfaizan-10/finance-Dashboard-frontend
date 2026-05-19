@@ -7,7 +7,7 @@ import { Download, Plus, Calendar, Filter, ChevronLeft, ChevronRight, TrendingUp
 import axios from 'axios';
 import { useAuth } from '../authcontext/AuthContext';
 
-// ✅ Category to ID mapping (must match backend)
+// Category to ID mapping (must match backend)
 const CATEGORY_TO_ID = {
   'Dinner': 1,
   'Driving': 2,
@@ -21,7 +21,7 @@ const CATEGORY_TO_ID = {
   'Rent': 10
 };
 
-// ✅ Reverse mapping for ID to category
+// Reverse mapping for ID to category
 const ID_TO_CATEGORY = {
   1: 'Dinner',
   2: 'Driving',
@@ -36,7 +36,7 @@ const ID_TO_CATEGORY = {
 };
 
 const Transactions = () => {
-  const { user, isAuthenticated, refreshToken, logout, getSessionStatus } = useAuth();
+  const { user, isAuthenticated, logout } = useAuth();
   const [transactions, setTransactions] = useState([]);
   const [filterType, setFilterType] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
@@ -46,70 +46,23 @@ const Transactions = () => {
   const [error, setError] = useState(null);
   const [dateRange, setDateRange] = useState('last30');
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [sessionInfo, setSessionInfo] = useState(null);
   const itemsPerPage = 8;
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
-  // ✅ Create axios instance with auth interceptor
+  // Create axios instance with auth header
   const apiClient = useCallback(() => {
     const token = localStorage.getItem("token");
-    const instance = axios.create({
+    return axios.create({
       baseURL: backendUrl,
       headers: {
         'Content-Type': 'application/json',
         ...(token && { Authorization: `Bearer ${token}` })
       }
     });
+  }, [backendUrl]);
 
-    // Response interceptor for token refresh
-    instance.interceptors.response.use(
-      (response) => response,
-      async (error) => {
-        const originalRequest = error.config;
-        
-        if (error.response?.status === 401 && !originalRequest._retry) {
-          originalRequest._retry = true;
-          
-          try {
-            const refreshed = await refreshToken();
-            if (refreshed) {
-              const newToken = localStorage.getItem("token");
-              originalRequest.headers.Authorization = `Bearer ${newToken}`;
-              return instance(originalRequest);
-            }
-          } catch (refreshError) {
-            logout();
-            window.location.href = '/login';
-            return Promise.reject(refreshError);
-          }
-        }
-        
-        return Promise.reject(error);
-      }
-    );
-    
-    return instance;
-  }, [backendUrl, refreshToken, logout]);
-
-  // ✅ Check session periodically
-  useEffect(() => {
-    const checkSession = () => {
-      const status = getSessionStatus();
-      setSessionInfo(status);
-      
-      if (status.isActive && status.remainingSeconds && status.remainingSeconds <= 300) {
-        console.warn(`⚠️ Session expires in ${Math.floor(status.remainingSeconds / 60)} minutes`);
-      }
-    };
-    
-    checkSession();
-    const interval = setInterval(checkSession, 60000);
-    
-    return () => clearInterval(interval);
-  }, [getSessionStatus]);
-
-  // ✅ Get userId from user object or localStorage
+  // Get userId from user object or localStorage
   const getUserId = useCallback(() => {
     if (user?.userId) return user.userId;
     if (user?.id) return user.id;
@@ -126,7 +79,7 @@ const Transactions = () => {
     return null;
   }, [user]);
 
-  // ✅ Fetch transactions with authentication
+  // Fetch transactions with authentication
   const fetchTransactions = useCallback(async (showRefreshIndicator = false) => {
     if (showRefreshIndicator) {
       setIsRefreshing(true);
@@ -136,17 +89,6 @@ const Transactions = () => {
     setError(null);
     
     try {
-      // Check authentication
-      if (!isAuthenticated || !isAuthenticated()) {
-        setError('Authentication required. Please login again.');
-        setTimeout(() => {
-          window.location.href = '/login';
-        }, 2000);
-        setLoading(false);
-        setIsRefreshing(false);
-        return;
-      }
-
       const token = localStorage.getItem('token');
       if (!token) {
         throw new Error('No authentication token found');
@@ -161,12 +103,6 @@ const Transactions = () => {
         throw new Error('Backend URL not configured');
       }
 
-      // Check token expiry before making request
-      const sessionStatus = getSessionStatus();
-      if (sessionStatus?.remainingSeconds && sessionStatus.remainingSeconds <= 0) {
-        throw new Error('Token expired');
-      }
-
       console.log(`Fetching transactions for user: ${userId}`);
       
       const client = apiClient();
@@ -176,7 +112,7 @@ const Transactions = () => {
       
       let transactionsData = [];
       
-      // ✅ Safely extract data
+      // Safely extract data
       if (response.data && response.data.data) {
         transactionsData = Array.isArray(response.data.data) ? response.data.data : [response.data.data];
       } else if (response.data && Array.isArray(response.data)) {
@@ -187,7 +123,7 @@ const Transactions = () => {
         transactionsData = [response.data];
       }
       
-      // ✅ Safely map transactions with proper error handling
+      // Safely map transactions with proper error handling
       const safeTransactions = transactionsData
         .filter(t => t && typeof t === 'object')
         .map(t => ({
@@ -230,27 +166,28 @@ const Transactions = () => {
       setIsRefreshing(false);
       setInitialLoading(false);
     }
-  }, [backendUrl, apiClient, isAuthenticated, getUserId, getSessionStatus]);
+  }, [backendUrl, apiClient, getUserId]);
 
   // Auto-refresh transactions every 5 minutes
   useEffect(() => {
     fetchTransactions();
     
     const intervalId = setInterval(() => {
-      if (isAuthenticated && isAuthenticated()) {
-        console.log("🔄 Auto-refreshing transactions...");
+      const token = localStorage.getItem('token');
+      if (token) {
+        console.log("Auto-refreshing transactions...");
         fetchTransactions(true);
       }
     }, 300000);
     
     return () => clearInterval(intervalId);
-  }, [fetchTransactions, isAuthenticated]);
+  }, [fetchTransactions]);
 
-  // ✅ Add new transaction with validation
+  // Add new transaction with validation
   const handleNewTransaction = async (transaction) => {
     console.log('New transaction:', transaction);
     
-    // ✅ Validate transaction data
+    // Validate transaction data
     if (!transaction.amount || transaction.amount <= 0) {
       alert('Please enter a valid amount');
       return;
@@ -266,18 +203,14 @@ const Transactions = () => {
       return;
     }
     
-    if (!isAuthenticated || !isAuthenticated()) {
+    const token = localStorage.getItem('token');
+    if (!token) {
       alert('Session expired. Please login again.');
       window.location.href = '/login';
       return;
     }
     
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        throw new Error('No authentication token');
-      }
-      
       const categoryId = CATEGORY_TO_ID[transaction.category];
       
       if (!categoryId) {
@@ -308,12 +241,9 @@ const Transactions = () => {
       
       console.log('Transaction saved:', response.data);
       
-      // ✅ Refresh transactions
+      // Refresh transactions
       await fetchTransactions();
       setShowForm(false);
-      
-      // Optional: Show success toast/notification
-      // showSuccess('Transaction created successfully!');
       
     } catch (error) {
       console.error('Error saving transaction:', error);
@@ -336,11 +266,12 @@ const Transactions = () => {
     }
   };
 
-  // ✅ Delete transaction
+  // Delete transaction
   const handleDeleteTransaction = async (transactionId) => {
     if (!confirm('Are you sure you want to delete this transaction?')) return;
     
-    if (!isAuthenticated || !isAuthenticated()) {
+    const token = localStorage.getItem('token');
+    if (!token) {
       alert('Session expired. Please login again.');
       window.location.href = '/login';
       return;
@@ -354,16 +285,13 @@ const Transactions = () => {
       // Refresh transactions
       await fetchTransactions();
       
-      // Optional: Show success message
-      // showSuccess('Transaction deleted successfully!');
-      
     } catch (error) {
       console.error('Error deleting transaction:', error);
       alert('Failed to delete transaction. Please try again.');
     }
   };
 
-  // ✅ Export to CSV with proper formatting
+  // Export to CSV with proper formatting
   const exportToCSV = () => {
     try {
       if (filtered.length === 0) {
@@ -402,7 +330,7 @@ const Transactions = () => {
     await fetchTransactions(true);
   };
 
-  // ✅ Filter transactions
+  // Filter transactions
   const filtered = React.useMemo(() => {
     let filteredData = [...transactions];
     
@@ -448,7 +376,7 @@ const Transactions = () => {
     setCurrentPage(1);
   }, [filterType, dateRange]);
 
-  // ✅ Statistics
+  // Statistics
   const stats = React.useMemo(() => {
     const income = filtered.filter(t => t.type?.toLowerCase() === 'income').reduce((sum, t) => sum + t.amount, 0);
     const expense = filtered.filter(t => t.type?.toLowerCase() === 'expense').reduce((sum, t) => sum + t.amount, 0);
@@ -463,11 +391,6 @@ const Transactions = () => {
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto"></div>
             <p className="mt-4 text-gray-500">Loading transactions...</p>
-            {sessionInfo?.remainingSeconds && (
-              <p className="mt-2 text-xs text-gray-400">
-                Session expires in {Math.floor(sessionInfo.remainingSeconds / 60)} minutes
-              </p>
-            )}
           </div>
         </div>
       </Layout>
@@ -507,26 +430,6 @@ const Transactions = () => {
   return (
     <Layout>
       <div className="p-8 pt-24 bg-white min-h-screen">
-        
-        {/* Session warning banner */}
-        {sessionInfo?.remainingSeconds && sessionInfo.remainingSeconds <= 600 && (
-          <div className="mb-6 bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-lg flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <span>⏰</span>
-              <span className="text-sm">
-                Your session will expire in {Math.floor(sessionInfo.remainingSeconds / 60)} minutes.
-                {sessionInfo.remainingSeconds <= 300 && ' Please save your work!'}
-              </span>
-            </div>
-            <button 
-              onClick={logout}
-              className="text-sm bg-yellow-100 px-3 py-1 rounded hover:bg-yellow-200"
-            >
-              Extend Session
-            </button>
-          </div>
-        )}
-        
         {/* Header */}
         <div className="mb-10 flex flex-col md:flex-row justify-between gap-6">
           <div>
