@@ -1,6 +1,6 @@
 // src/authcontext/AuthContext.js
 import axios from 'axios';
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 export const AuthContext = createContext(null);
@@ -19,7 +19,7 @@ export const AuthProvider = ({ children }) => {
   const navigate = useNavigate();
 
   const getBackendUrl = () => {
-    const url = import.meta.env.VITE_BACKEND_URL || 'https://finance-dashboard-3nub.onrender.com';
+    const url = import.meta.env.VITE_BACKEND_URL;
     if (!url) {
       console.error('❌ VITE_BACKEND_URL is not defined');
       return 'http://localhost:8080';
@@ -27,7 +27,7 @@ export const AuthProvider = ({ children }) => {
     return url;
   };
 
-  const parseJwt = (token) => {
+  const parseJwt = useCallback((token) => {
     try {
       if (!token) return { sub: "unknown", name: "User" };
       
@@ -43,9 +43,9 @@ export const AuthProvider = ({ children }) => {
       console.error("Error parsing JWT:", error);
       return { sub: "unknown", name: "User" };
     }
-  };
+  }, []);
 
-  const isTokenExpired = (token) => {
+  const isTokenExpired = useCallback((token) => {
     try {
       const decoded = parseJwt(token);
       if (decoded.exp) {
@@ -56,9 +56,9 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       return true;
     }
-  };
+  }, [parseJwt]);
 
-  const saveUserData = (userData, jwtToken) => {
+  const saveUserData = useCallback((userData, jwtToken) => {
     const userToStore = {
       ...userData,
       jwt: jwtToken,
@@ -70,21 +70,21 @@ export const AuthProvider = ({ children }) => {
     setUser(userToStore);
     setToken(jwtToken);
     
-    console.log(" User data saved");
-  };
+    console.log("✅ User data saved");
+  }, []);
 
-  const clearUserData = () => {
+  const clearUserData = useCallback(() => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setUser(null);
     setToken(null);
     console.log("🗑️ User data cleared");
-  };
+  }, []);
 
   // Initialize auth - DON'T redirect here!
   useEffect(() => {
     const initializeAuth = () => {
-      console.log(" Initializing authentication...");
+      console.log("🔐 Initializing authentication...");
       const storedToken = localStorage.getItem('token');
       const storedUser = localStorage.getItem('user');
       
@@ -92,7 +92,7 @@ export const AuthProvider = ({ children }) => {
         if (!isTokenExpired(storedToken)) {
           try {
             const parsedUser = JSON.parse(storedUser);
-            console.log("Found valid stored user:", parsedUser.email);
+            console.log("✅ Found valid stored user:", parsedUser.email);
             setUser(parsedUser);
             setToken(storedToken);
           } catch (err) {
@@ -100,7 +100,7 @@ export const AuthProvider = ({ children }) => {
             clearUserData();
           }
         } else {
-          console.log(" Token expired");
+          console.log("⏰ Token expired");
           clearUserData();
         }
       }
@@ -109,15 +109,23 @@ export const AuthProvider = ({ children }) => {
     };
     
     initializeAuth();
-  }, []); // Empty dependency array - runs once on mount
+  }, [isTokenExpired, clearUserData]);
 
-  // Handle OAuth redirect
+  // Handle OAuth redirect - ONLY this useEffect handles OAuth
   useEffect(() => {
     const handleOAuthRedirect = async () => {
       const backendUrl = getBackendUrl();
       const urlParams = new URLSearchParams(window.location.search);
-      const token = urlParams.get('token');
+      const oauthToken = urlParams.get('token');
       const error = urlParams.get('error');
+      
+      // Only process if we're on OAuth callback
+      if (!oauthToken && !error) {
+        return; // Not an OAuth callback, do nothing
+      }
+      
+      console.log("🔄 Processing OAuth redirect...");
+      setLoading(true);
       
       if (error) {
         console.error("OAuth error:", error);
@@ -127,18 +135,19 @@ export const AuthProvider = ({ children }) => {
         return;
       }
       
-      if (token) {
-        console.log(" Processing OAuth token...");
+      if (oauthToken) {
+        console.log("📝 Processing OAuth token...");
         
-        if (isTokenExpired(token)) {
+        if (isTokenExpired(oauthToken)) {
           console.error("Token expired");
           setError("Token has expired");
-            clearUserData();
+          clearUserData();
           setLoading(false);
+          window.history.replaceState({}, document.title, window.location.pathname);
           return;
         }
         
-        const userInfo = parseJwt(token);
+        const userInfo = parseJwt(oauthToken);
         const userData = {
           email: userInfo.sub || userInfo.email,
           name: userInfo.name || "User",
@@ -147,12 +156,17 @@ export const AuthProvider = ({ children }) => {
           roles: ['USER']
         };
         
-        saveUserData(userData, token);
-        setLoading(false);
+        saveUserData(userData, oauthToken);
+        
+        // Clear URL parameters before redirect
+        window.history.replaceState({}, document.title, window.location.pathname);
         
         const redirectUrl = localStorage.getItem('redirectAfterLogin') || '/';
         localStorage.removeItem('redirectAfterLogin');
-        window.location.href = redirectUrl;
+        
+        setLoading(false);
+        // Use navigate instead of window.location for smoother transition
+        navigate(redirectUrl);
         return;
       }
       
@@ -160,14 +174,15 @@ export const AuthProvider = ({ children }) => {
     };
     
     handleOAuthRedirect();
-  }, []);
+  }, [parseJwt, isTokenExpired, saveUserData, clearUserData, navigate]); // Fixed dependencies
 
   const login = async (email, password) => {
     const backendUrl = getBackendUrl();
-    console.log( backendUrl);
+    console.log("🔐 Backend URL:", backendUrl);
     
     try {
       setError(null);
+      setLoading(true);
       console.log('Login attempt for email:', email);
       
       const response = await axios.post(`${backendUrl}/api/auth/login`, {
@@ -181,13 +196,13 @@ export const AuthProvider = ({ children }) => {
         const userEmail = response.data.email || email;
         const userName = response.data.name || email.split('@')[0];
 
-          const finalToken = typeof token === 'string' ? token : token?.token;
-
+        const finalToken = typeof token === 'string' ? token : token?.token;
         
         if (!finalToken) {
-        setError("Invalid server response - no token received");
-        return { success: false, message: "Invalid server response" };
-      }
+          setError("Invalid server response - no token received");
+          setLoading(false);
+          return { success: false, message: "Invalid server response" };
+        }
         
         const userData = {
           email: userEmail,
@@ -197,12 +212,14 @@ export const AuthProvider = ({ children }) => {
         };
         
         saveUserData(userData, finalToken);
+        setLoading(false);
         
-        // ✅ Use window.location for redirect to avoid React Router issues
-        window.location.href = '/';
+        // Use navigate instead of window.location
+        navigate('/');
         
         return { success: true, message: "Login successful" };
       } else {
+        setLoading(false);
         return { success: false, message: 'Login failed' };
       }
     } catch (error) {
@@ -216,16 +233,18 @@ export const AuthProvider = ({ children }) => {
         errorMessage = error.response.data.message;
       }
       setError(errorMessage);
+      setLoading(false);
       return { success: false, message: errorMessage };
     }
   };
 
   const register = async (name, email, password) => {
     const backendUrl = getBackendUrl();
-    console.log('Register attempt for:', {  backendUrl });
+    console.log('Register attempt for:', { backendUrl });
     
     try {
       setError(null);
+      setLoading(true);
       console.log('Register attempt for:', { name, email });
       
       const response = await axios.post(`${backendUrl}/api/auth/signup`, {
@@ -240,12 +259,13 @@ export const AuthProvider = ({ children }) => {
         const userEmail = response.data.email || email;
         const userName = response.data.name || name;
         
-         const finalToken = typeof token === 'string' ? token : token?.token;
+        const finalToken = typeof token === 'string' ? token : token?.token;
       
-      if (!finalToken) {
-        setError("Invalid server response - no token received");
-        return { success: false, message: "Invalid server response" };
-      }
+        if (!finalToken) {
+          setError("Invalid server response - no token received");
+          setLoading(false);
+          return { success: false, message: "Invalid server response" };
+        }
         
         const userData = {
           email: userEmail,
@@ -255,12 +275,14 @@ export const AuthProvider = ({ children }) => {
         };
         
         saveUserData(userData, finalToken);
+        setLoading(false);
         
-        // ✅ Use window.location for redirect
-        window.location.href = '/';
+        // Use navigate instead of window.location
+        navigate('/');
         
         return { success: true, message: "Registration successful" };
       } else {
+        setLoading(false);
         return { success: false, message: "Registration failed" };
       }
     } catch (error) {
@@ -274,43 +296,15 @@ export const AuthProvider = ({ children }) => {
         errorMessage = error.response.data.message;
       }
       setError(errorMessage);
+      setLoading(false);
       return { success: false, message: errorMessage };
     }
   };
 
-  if (token) {
-  console.log("Processing OAuth token...");
-  
-  if (isTokenExpired(token)) {
-    console.error("Token expired");
-    setError("Token has expired");
-    clearUserData();
-    setLoading(false);
-    window.history.replaceState({}, document.title, window.location.pathname);
-    return;
-  }
- const userInfo = parseJwt(token);
-  const userData = {
-    email: userInfo.sub || userInfo.email,
-    name: userInfo.name || "User",
-    userId: userInfo.userId || userInfo.id || userInfo.sub,
-    provider: 'google',
-    roles: ['USER']
-  };
-
-    saveUserData(userData, token);
-  setLoading(false);
-  
-  const redirectUrl = localStorage.getItem('redirectAfterLogin') || '/';
-  localStorage.removeItem('redirectAfterLogin');
-  window.location.href = redirectUrl;
-  return;
-}
-
   const logout = () => {
     console.log("Logging out...");
     clearUserData();
-    window.location.href = '/login';
+    navigate('/login');
   };
 
   const googleLogin = () => {
@@ -322,11 +316,11 @@ export const AuthProvider = ({ children }) => {
     window.location.href = `${backendUrl}/oauth2/authorization/google`;
   };
 
-  const isAuthenticated = () => {
+  const isAuthenticated = useCallback(() => {
     const storedToken = localStorage.getItem('token');
     const storedUser = localStorage.getItem('user');
     return !!(storedToken && storedUser && !isTokenExpired(storedToken));
-  };
+  }, [isTokenExpired]);
 
   return (
     <AuthContext.Provider value={{ 
