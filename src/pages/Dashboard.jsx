@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/layout/Layout';
 import TransactionRow from '../components/TransactionRow';
 import { useAuth } from '../authcontext/AuthContext';
-import { Wallet, ArrowDownLeft, ArrowUpRight, Plus, TrendingUp } from 'lucide-react';
+import { Wallet, ArrowDownLeft, ArrowUpRight, Plus } from 'lucide-react';
 import axios from 'axios';
 
 const Dashboard = () => {
@@ -12,13 +12,40 @@ const Dashboard = () => {
     totalBalance: 0,
     totalIncome: 0,
     totalExpense: 0,
-    monthlyChange: 0,
-    recentTransactions: [],
-    categoryBreakdown: {}
+    recentTransactions: []
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
+
+  // Create axios instance with auth header
+  const apiClient = useCallback(() => {
+    const token = localStorage.getItem("token");
+    return axios.create({
+      baseURL: backendUrl,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` })
+      }
+    });
+  }, [backendUrl]);
+
+  // Get userId from user object or localStorage
+  const getUserId = useCallback(() => {
+    if (user?.userId) return user.userId;
+    if (user?.id) return user.id;
+    
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        return parsedUser.userId || parsedUser.id;
+      } catch (err) {
+        console.error('Error parsing stored user:', err);
+      }
+    }
+    return null;
+  }, [user]);
 
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
@@ -26,7 +53,6 @@ const Dashboard = () => {
     
     try {
       const token = localStorage.getItem("token");
-
       if (!token) {
         console.error("No authentication token found");
         setError("User not authenticated. Please login again.");
@@ -44,56 +70,92 @@ const Dashboard = () => {
         return;
       }
       
-      console.log("Fetching dashboard with token:", token.substring(0, 50) + "...");
+      const userId = getUserId();
+      if (!userId) {
+        throw new Error('User ID not found');
+      }
       
-      const response = await axios.get(`${backendUrl}/api/dashboard`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+      const client = apiClient();
+      
+      // Fetch transactions
+      const transactionsResponse = await client.get(`/api/transaction/users/${userId}`);
+      console.log('Transactions data:', transactionsResponse.data);
+      
+      let transactionsData = [];
+      if (transactionsResponse.data && transactionsResponse.data.data) {
+        transactionsData = Array.isArray(transactionsResponse.data.data) ? transactionsResponse.data.data : [transactionsResponse.data.data];
+      } else if (transactionsResponse.data && Array.isArray(transactionsResponse.data)) {
+        transactionsData = transactionsResponse.data;
+      } else if (transactionsResponse.data && transactionsResponse.data.transactions) {
+        transactionsData = transactionsResponse.data.transactions;
+      }
+      
+      // Calculate income and expense from transactions
+      let totalIncome = 0;
+      let totalExpense = 0;
+      
+      const mappedTransactions = transactionsData
+        .filter(t => t && typeof t === 'object')
+        .map(t => {
+          const amount = Math.abs(Number(t.amount) || 0);
+          const type = t.type || (t.amount > 0 ? 'INCOME' : 'EXPENSE');
+          
+          if (type === 'INCOME') {
+            totalIncome += amount;
+          } else {
+            totalExpense += amount;
+          }
+          
+          return {
+            id: t.id || `temp-${Date.now()}-${Math.random()}`,
+            description: t.description || t.merchant || 'No description',
+            category: t.category || 'Uncategorized',
+            type: type,
+            amount: amount,
+            transactiondate: t.transactiondate || t.date || new Date().toISOString().split('T')[0],
+            categoryId: t.categoryId
+          };
+        });
+      
+      // Calculate total balance (Income - Expense)
+      const totalBalance = totalIncome - totalExpense;
+      
+      // Get recent transactions (last 5)
+      const recentTransactions = mappedTransactions
+        .sort((a, b) => new Date(b.transactiondate) - new Date(a.transactiondate))
+        .slice(0, 5);
+      
+      console.log('Dashboard calculations:', {
+        totalIncome,
+        totalExpense,
+        totalBalance,
+        recentCount: recentTransactions.length
       });
       
-      console.log('Dashboard data:', response.data);
-      
-      const data = response.data || {};
-      
       setDashboardData({
-        totalBalance: typeof data.totalBalance === 'number' ? data.totalBalance : 0,
-        totalIncome: typeof data.totalIncome === 'number' ? data.totalIncome : 0,
-        totalExpense: typeof data.totalExpense === 'number' ? data.totalExpense : 0,
-        monthlyChange: typeof data.monthlyChange === 'number' ? data.monthlyChange : 0,
-        recentTransactions: Array.isArray(data.recentTransactions) ? data.recentTransactions : [],
-        categoryBreakdown: data.categoryBreakdown && typeof data.categoryBreakdown === 'object' ? data.categoryBreakdown : {}
+        totalBalance: totalBalance,
+        totalIncome: totalIncome,
+        totalExpense: totalExpense,
+        recentTransactions: recentTransactions
       });
       
     } catch (err) {
-      console.error('Error fetching dashboard:', err);
+      console.error('Error fetching dashboard data:', err);
       
-      if (err.response) {
-        if (err.response.status === 401) {
-          console.log("401 error - using default zero values");
-          // Don't show error, just use default zero values
-          setDashboardData({
-            totalBalance: 0,
-            totalIncome: 0,
-            totalExpense: 0,
-            monthlyChange: 0,
-            recentTransactions: [],
-            categoryBreakdown: {}
-          });
-        } else if (err.response.status === 404) {
-          console.log("Dashboard endpoint not found - using default values");
-          // Keep default zero values
-        } else {
-          setError(err.response.data?.message || 'Failed to load dashboard data');
-        }
-      } else if (err.request) {
-        console.log("Network error - using default values");
-        // Keep default zero values, don't show error
+      if (err.response?.status === 401) {
+        setError('Session expired. Please login again.');
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 2000);
+      } else {
+        setError(err.response?.data?.message || 'Failed to load dashboard data');
       }
     } finally {
       setLoading(false);
     }
-  }, [backendUrl]);
+  }, [backendUrl, apiClient, getUserId]);
 
   useEffect(() => {
     fetchDashboardData();
@@ -116,12 +178,6 @@ const Dashboard = () => {
     }
   }, [user]);
 
-  const getMonthlyChangeDisplay = () => {
-    const change = dashboardData.monthlyChange;
-    if (typeof change !== 'number') return '0.0';
-    return change.toFixed(1);
-  };
-
   if (loading) {
     return (
       <Layout>
@@ -135,8 +191,7 @@ const Dashboard = () => {
     );
   }
 
-  // Only show error if it's not a 401 (which we handled with zero values)
-  if (error && !error.includes('Session expired')) {
+  if (error) {
     return (
       <Layout>
         <div className="p-8 pt-24 min-h-screen">
@@ -163,7 +218,7 @@ const Dashboard = () => {
         <div className="mb-8">
           <h1 className="text-3xl font-extrabold text-black">Financial Overview</h1>
           <p className="text-gray-500 mt-2">
-            Welcome back, {getDisplayName()}. Your portfolio is up {getMonthlyChangeDisplay()}% this week.
+            Welcome back, {getDisplayName()}. Here's your financial summary.
           </p>
         </div>
 
@@ -177,14 +232,11 @@ const Dashboard = () => {
                 </div>
                 <p className="text-xs font-semibold text-green-600 uppercase tracking-wider">REMAINING BALANCE</p>
               </div>
-              <div className="flex items-center gap-1 text-green-600 text-sm font-medium">
-                <TrendingUp size={14} /> {getMonthlyChangeDisplay()}%
-              </div>
             </div>
             <p className="text-3xl font-bold text-green-700 mb-2">
-              ${(dashboardData.totalBalance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${dashboardData.totalBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
-            <p className="text-xs text-green-500">Available to spend</p>
+            <p className="text-xs text-green-500">Income - Expenses</p>
           </div>
 
           {/* Income Card */}
@@ -198,9 +250,9 @@ const Dashboard = () => {
               </div>
             </div>
             <p className="text-3xl font-bold text-gray-900 mb-2">
-              ${(dashboardData.totalIncome || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${dashboardData.totalIncome.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
-            <p className="text-xs text-emerald-600">+2.4% vs last month</p>
+            <p className="text-xs text-emerald-600">From all transactions</p>
           </div>
 
           {/* Expense Card */}
@@ -214,9 +266,9 @@ const Dashboard = () => {
               </div>
             </div>
             <p className="text-3xl font-bold text-gray-900 mb-2">
-              ${(dashboardData.totalExpense || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${dashboardData.totalExpense.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
-            <p className="text-xs text-gray-400">Total expenses this month</p>
+            <p className="text-xs text-gray-400">From all transactions</p>
           </div>
         </div>
 
@@ -262,10 +314,11 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* FAB button */}
+        {/* FAB button - show only, not working */}
         <button 
-          onClick={() => window.location.href = '/transactions'}
-          className="fixed bottom-8 right-8 bg-emerald-600 hover:bg-emerald-700 text-white p-4 rounded-full shadow-lg transition-all hover:shadow-xl z-50"
+          disabled
+          className="fixed bottom-8 right-8 bg-gray-300 cursor-not-allowed text-white p-4 rounded-full shadow-lg z-50"
+          title="Add Transaction (Coming Soon)"
         >
           <Plus size={24} />
         </button>

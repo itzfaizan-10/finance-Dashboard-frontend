@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/layout/Layout';
 import TransactionRow from '../components/TransactionRow';
 import TransactionForm from '../components/TransactionForm';
-import { Download, Plus, Calendar, Filter, ChevronLeft, ChevronRight, TrendingUp, AlertCircle, RefreshCw } from 'lucide-react';
+import { Download, Plus, Calendar, Filter, ChevronLeft, ChevronRight, AlertCircle } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../authcontext/AuthContext';
 
@@ -36,7 +36,7 @@ const ID_TO_CATEGORY = {
 };
 
 const Transactions = () => {
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, logout } = useAuth();
   const [transactions, setTransactions] = useState([]);
   const [filterType, setFilterType] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
@@ -45,7 +45,6 @@ const Transactions = () => {
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dateRange, setDateRange] = useState('last30');
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const itemsPerPage = 8;
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
@@ -80,12 +79,8 @@ const Transactions = () => {
   }, [user]);
 
   // Fetch transactions with authentication
-  const fetchTransactions = useCallback(async (showRefreshIndicator = false) => {
-    if (showRefreshIndicator) {
-      setIsRefreshing(true);
-    } else {
-      setLoading(true);
-    }
+  const fetchTransactions = useCallback(async () => {
+    setLoading(true);
     setError(null);
     
     try {
@@ -163,24 +158,13 @@ const Transactions = () => {
       setTransactions([]);
     } finally {
       setLoading(false);
-      setIsRefreshing(false);
       setInitialLoading(false);
     }
   }, [backendUrl, apiClient, getUserId]);
 
-  // Auto-refresh transactions every 5 minutes
+  // Load transactions on mount
   useEffect(() => {
     fetchTransactions();
-    
-    const intervalId = setInterval(() => {
-      const token = localStorage.getItem('token');
-      if (token) {
-        console.log("Auto-refreshing transactions...");
-        fetchTransactions(true);
-      }
-    }, 300000);
-    
-    return () => clearInterval(intervalId);
   }, [fetchTransactions]);
 
   // Add new transaction with validation
@@ -291,45 +275,6 @@ const Transactions = () => {
     }
   };
 
-  // Export to CSV with proper formatting
-  const exportToCSV = () => {
-    try {
-      if (filtered.length === 0) {
-        alert('No transactions to export');
-        return;
-      }
-      
-      const headers = ['Date', 'Description', 'Category', 'Type', 'Amount'];
-      const csvData = filtered.map(t => [
-        t.transactiondate,
-        `"${t.description.replace(/"/g, '""')}"`,
-        t.category,
-        t.type,
-        t.amount.toFixed(2)
-      ]);
-      
-      const csvContent = [headers, ...csvData].map(row => row.join(',')).join('\n');
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `transactions_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      
-      console.log(`Exported ${filtered.length} transactions to CSV`);
-    } catch (error) {
-      console.error('Error exporting CSV:', error);
-      alert('Failed to export CSV');
-    }
-  };
-
-  const handleManualRefresh = async () => {
-    await fetchTransactions(true);
-  };
-
   // Filter transactions
   const filtered = React.useMemo(() => {
     let filteredData = [...transactions];
@@ -376,13 +321,6 @@ const Transactions = () => {
     setCurrentPage(1);
   }, [filterType, dateRange]);
 
-  // Statistics
-  const stats = React.useMemo(() => {
-    const income = filtered.filter(t => t.type?.toLowerCase() === 'income').reduce((sum, t) => sum + t.amount, 0);
-    const expense = filtered.filter(t => t.type?.toLowerCase() === 'expense').reduce((sum, t) => sum + t.amount, 0);
-    return { income, expense, balance: income - expense };
-  }, [filtered]);
-
   // Loading state
   if (initialLoading) {
     return (
@@ -408,10 +346,9 @@ const Transactions = () => {
             <p className="text-sm mb-4">{error}</p>
             <div className="flex gap-3 justify-center">
               <button 
-                onClick={handleManualRefresh} 
+                onClick={() => fetchTransactions()} 
                 className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors inline-flex items-center gap-2"
               >
-                <RefreshCw size={16} />
                 Retry
               </button>
               <button 
@@ -442,19 +379,11 @@ const Transactions = () => {
             )}
           </div>
           <div className="flex gap-3">
+            {/* Export CSV button - show only, not working */}
             <button 
-              onClick={handleManualRefresh}
-              disabled={isRefreshing}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
-              title="Refresh transactions"
-            >
-              <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
-              Refresh
-            </button>
-            <button 
-              onClick={exportToCSV} 
-              disabled={filtered.length === 0}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              disabled
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-400 cursor-not-allowed transition-colors"
+              title="Export CSV (Coming Soon)"
             >
               <Download size={16} /> Export CSV
             </button>
@@ -464,24 +393,6 @@ const Transactions = () => {
             >
               <Plus size={16} /> New Transaction
             </button>
-          </div>
-        </div>
-
-        {/* Stats Summary */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          <div className="bg-gradient-to-r from-emerald-50 to-green-50 p-4 rounded-xl border border-emerald-100">
-            <p className="text-sm text-gray-600 mb-1">Total Income</p>
-            <p className="text-2xl font-bold text-emerald-600">${stats.income.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-          </div>
-          <div className="bg-gradient-to-r from-red-50 to-orange-50 p-4 rounded-xl border border-red-100">
-            <p className="text-sm text-gray-600 mb-1">Total Expenses</p>
-            <p className="text-2xl font-bold text-red-600">${stats.expense.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-          </div>
-          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-xl border border-blue-100">
-            <p className="text-sm text-gray-600 mb-1">Net Balance</p>
-            <p className={`text-2xl font-bold ${stats.balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-              ${stats.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </p>
           </div>
         </div>
 
@@ -615,37 +526,6 @@ const Transactions = () => {
               </div>
             </div>
           )}
-        </div>
-
-        {/* Insights Section */}
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-8">
-          <div className="col-span-1 bg-emerald-50 p-8 rounded-xl relative overflow-hidden group hover:shadow-lg transition-shadow">
-            <div className="relative z-10">
-              <h3 className="text-xl font-bold mb-2 text-gray-900">Spending Insight</h3>
-              <p className="text-gray-600 text-sm mb-6">
-                {stats.expense > 0 
-                  ? `Your total expenses this period are $${stats.expense.toLocaleString()}. ${stats.expense > stats.income ? 'Consider reviewing your spending habits.' : 'Great job keeping expenses under control!'}`
-                  : 'Add some transactions to get spending insights.'}
-              </p>
-              <a href="/budget" className="inline-flex items-center gap-2 text-sm font-bold text-emerald-700 hover:gap-3 transition-all">
-                View Analysis <TrendingUp size={14} />
-              </a>
-            </div>
-          </div>
-          
-          <div className="col-span-2 bg-gray-50 p-8 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4 border border-gray-200">
-            <div>
-              <h3 className="text-xl font-bold mb-2 text-gray-900">Secure Export Ready</h3>
-              <p className="text-gray-600 text-sm">Your transaction history can be exported for tax purposes.</p>
-            </div>
-            <button 
-              onClick={exportToCSV}
-              disabled={filtered.length === 0}
-              className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-            >
-              Download Report ({filtered.length} transactions)
-            </button>
-          </div>
         </div>
       </div>
       

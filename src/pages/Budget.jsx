@@ -2,19 +2,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/layout/Layout';
 import BudgetCard from '../components/BudgetCard';
-import { Plus, TrendingDown, PiggyBank, AlertCircle, X, RefreshCw } from 'lucide-react';
+import { Plus, TrendingDown, PiggyBank, AlertCircle, X } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../authcontext/AuthContext';
 
 const Budget = () => {
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, logout } = useAuth();
   const [budgets, setBudgets] = useState([]);
   const [categories, setCategories] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [summary, setSummary] = useState({
     totalSpent: 0,
     totalLimit: 0,
@@ -86,14 +85,25 @@ const Budget = () => {
     return category ? category.name : null;
   }, [categories]);
 
+  // Get color based on percentage
+  const getPercentageColor = (percentage) => {
+    if (percentage >= 100) return 'bg-red-500';
+    if (percentage >= 80) return 'bg-yellow-500';
+    if (percentage >= 50) return 'bg-emerald-500';
+    return 'bg-green-500';
+  };
+
+  // Get border color based on percentage
+  const getBorderColor = (percentage) => {
+    if (percentage >= 100) return 'border-red-400';
+    if (percentage >= 80) return 'border-yellow-400';
+    if (percentage >= 50) return 'border-emerald-400';
+    return 'border-green-400';
+  };
+
   // Fetch budgets with authentication
-  const fetchBudgets = useCallback(async (showRefreshIndicator = false) => {
-    if (showRefreshIndicator) {
-      setIsRefreshing(true);
-    } else {
-      setLoading(true);
-    }
-    
+  const fetchBudgets = useCallback(async () => {
+    setLoading(true);
     setError(null);
     
     try {
@@ -132,7 +142,7 @@ const Budget = () => {
         budgetsData = [response.data];
       }
       
-      // Transform budgets with category names
+      // Transform budgets with category names and use backend percentage
       const budgetsWithCategoryName = budgetsData
         .filter(budget => budget)
         .map(budget => {
@@ -150,8 +160,13 @@ const Budget = () => {
           const spentAmount = Number(budget.spentAmount) || 0;
           const remainingAmount = budget.remainingAmount !== undefined ? 
             Number(budget.remainingAmount) : limitAmount - spentAmount;
-          const percentageUsed = budget.percentageUsed !== undefined ?
+          
+          // Use percentage from backend if available, otherwise calculate
+          let percentageUsed = budget.percentageUsed !== undefined ?
             Number(budget.percentageUsed) : (limitAmount > 0 ? (spentAmount / limitAmount) * 100 : 0);
+          
+          // Round to 1 decimal place
+          percentageUsed = Math.round(percentageUsed * 10) / 10;
           
           return {
             id: budget.id || `budget_${Date.now()}_${Math.random()}`,
@@ -211,24 +226,13 @@ const Budget = () => {
       }
     } finally {
       setLoading(false);
-      setIsRefreshing(false);
       setInitialLoading(false);
     }
   }, [backendUrl, apiClient, getUserId, getCategoryName]);
 
-  // Auto-refresh budgets every 5 minutes
+  // Load budgets on mount
   useEffect(() => {
     fetchBudgets();
-    
-    const intervalId = setInterval(() => {
-      const token = localStorage.getItem('token');
-      if (token) {
-        console.log("Auto-refreshing budgets...");
-        fetchBudgets(true);
-      }
-    }, 300000);
-    
-    return () => clearInterval(intervalId);
   }, [fetchBudgets]);
 
   useEffect(() => {
@@ -337,10 +341,6 @@ const Budget = () => {
     }
   };
 
-  const handleManualRefresh = async () => {
-    await fetchBudgets(true);
-  };
-
   // Loading state
   if (initialLoading) {
     return (
@@ -366,10 +366,9 @@ const Budget = () => {
             <p className="text-gray-500 mb-4">{error}</p>
             <div className="space-x-3">
               <button 
-                onClick={handleManualRefresh}
+                onClick={fetchBudgets}
                 className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 inline-flex items-center gap-2"
               >
-                <RefreshCw size={16} />
                 Try Again
               </button>
               <button 
@@ -388,27 +387,19 @@ const Budget = () => {
   return (
     <Layout>
       <div className="p-8 pt-24 bg-white min-h-screen">
-        {/* Header with refresh button */}
-        <div className="mb-10 flex justify-between items-start">
+        {/* Header - Removed refresh button */}
+        <div className="mb-10">
           <div>
             <h2 className="text-3xl font-extrabold tracking-tight text-black">Monthly Budget</h2>
             <p className="text-gray-500">
               Your curated financial outlook for {new Date().toLocaleString('default', { month: 'long' })} {new Date().getFullYear()}.
             </p>
           </div>
-          <button
-            onClick={handleManualRefresh}
-            disabled={isRefreshing}
-            className="p-2 text-gray-500 hover:text-emerald-600 transition-colors disabled:opacity-50"
-            title="Refresh data"
-          >
-            <RefreshCw size={20} className={isRefreshing ? 'animate-spin' : ''} />
-          </button>
         </div>
 
-        {/* Summary Cards */}
+        {/* Summary Cards with minimal border and light green */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-          <div className="md:col-span-2 bg-white p-8 rounded-xl border border-gray-200">
+          <div className="md:col-span-2 bg-white p-8 rounded-xl border border-emerald-100 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex justify-between items-start">
               <div>
                 <span className="text-xs uppercase tracking-widest text-gray-500">Total Remaining</span>
@@ -419,7 +410,7 @@ const Budget = () => {
               <div className={`px-4 py-1.5 rounded-full text-sm font-semibold ${
                 summary.overallPercentage >= 100 ? 'bg-red-100 text-red-700' :
                 summary.overallPercentage >= 80 ? 'bg-yellow-100 text-yellow-700' :
-                'bg-gray-100 text-gray-700'
+                'bg-emerald-100 text-emerald-700'
               }`}>
                 {summary.overallPercentage >= 100 ? 'Over Budget' : 
                  summary.overallPercentage >= 80 ? 'Near Limit' : 'On Track'}
@@ -427,7 +418,7 @@ const Budget = () => {
             </div>
             <div className="mt-8">
               <div className="flex justify-between text-sm mb-3">
-                <span className="text-gray-600">{Math.round(summary.overallPercentage)}% of monthly limit reached</span>
+                <span className="text-gray-600">{summary.overallPercentage.toFixed(1)}% of monthly limit reached</span>
                 <span className="font-bold text-gray-900">
                   ${summary.totalSpent.toLocaleString(undefined, { minimumFractionDigits: 2 })} / 
                   ${summary.totalLimit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -435,7 +426,11 @@ const Budget = () => {
               </div>
               <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
                 <div 
-                  className="h-full bg-emerald-600 rounded-full transition-all duration-500" 
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    summary.overallPercentage >= 100 ? 'bg-red-500' :
+                    summary.overallPercentage >= 80 ? 'bg-yellow-500' :
+                    'bg-emerald-500'
+                  }`}
                   style={{ width: `${Math.min(summary.overallPercentage, 100)}%` }}
                 />
               </div>
@@ -444,7 +439,7 @@ const Budget = () => {
           
           {/* Alert Card */}
           {overBudget.length > 0 && (
-            <div className="bg-red-50 p-8 rounded-xl border border-red-200">
+            <div className="bg-red-50 p-8 rounded-xl border border-red-200 shadow-sm">
               <div className="flex items-center gap-2 text-red-600 mb-4">
                 <AlertCircle size={16} />
                 <span className="font-bold uppercase text-xs">Budget Alert</span>
@@ -457,7 +452,7 @@ const Budget = () => {
               </p>
               <button 
                 onClick={() => handleDeleteBudget(overBudget[0].id)}
-                className="w-full py-3 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700"
+                className="w-full py-3 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 transition-colors"
               >
                 Adjust Budget
               </button>
@@ -466,7 +461,7 @@ const Budget = () => {
 
           {/* Warning Card */}
           {warningBudget.length > 0 && overBudget.length === 0 && (
-            <div className="bg-yellow-50 p-8 rounded-xl border border-yellow-200">
+            <div className="bg-yellow-50 p-8 rounded-xl border border-yellow-200 shadow-sm">
               <div className="flex items-center gap-2 text-yellow-600 mb-4">
                 <AlertCircle size={16} />
                 <span className="font-bold uppercase text-xs">Warning</span>
@@ -475,7 +470,7 @@ const Budget = () => {
                 {warningBudget[0].categoryName} near limit
               </h3>
               <p className="text-yellow-600 text-sm mb-4">
-                You've used {Math.round(warningBudget[0].percentageUsed)}% of your ${warningBudget[0].limitAmount.toLocaleString()} budget.
+                You've used {warningBudget[0].percentageUsed.toFixed(1)}% of your ${warningBudget[0].limitAmount.toLocaleString()} budget.
               </p>
             </div>
           )}
@@ -494,9 +489,9 @@ const Budget = () => {
           
           <button 
             onClick={() => setShowForm(true)}
-            className="bg-gray-50 p-6 rounded-xl border-2 border-dashed border-gray-300 flex flex-col items-center justify-center gap-3 hover:bg-gray-100 transition-all"
+            className="bg-gray-50 p-6 rounded-xl border-2 border-dashed border-emerald-200 flex flex-col items-center justify-center gap-3 hover:bg-emerald-50 transition-all"
           >
-            <div className="w-12 h-12 rounded-full bg-white border border-gray-200 flex items-center justify-center transition-transform group-hover:scale-110">
+            <div className="w-12 h-12 rounded-full bg-white border border-emerald-200 flex items-center justify-center transition-transform group-hover:scale-110">
               <Plus size={24} className="text-emerald-600" />
             </div>
             <span className="font-bold text-emerald-600">Add Category</span>
@@ -573,38 +568,47 @@ const Budget = () => {
           </div>
         )}
 
-        {/* Insights Section */}
-        <div className="bg-white rounded-xl border border-gray-200 p-8 mt-10">
+        {/* Insights Section with colored graph bars */}
+        <div className="bg-white rounded-xl border border-emerald-100 p-8 mt-10 shadow-sm">
           <div className="flex flex-col md:flex-row gap-8 items-center">
             <div className="w-full md:w-1/2">
               <h3 className="text-xl font-bold text-emerald-600 mb-4">Spending Insights</h3>
               <p className="text-gray-600 mb-6">
                 You have {budgets.length} budget categories with a total limit of ${summary.totalLimit.toLocaleString()}.
-                You've utilized {Math.round(summary.overallPercentage)}% of your total budget.
+                You've utilized {summary.overallPercentage.toFixed(1)}% of your total budget.
               </p>
               <div className="flex gap-4">
-                <div className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-bold">
-                  <TrendingDown size={14} /> {Math.round(summary.overallPercentage)}% Used
+                <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-bold border border-emerald-200">
+                  <TrendingDown size={14} /> {summary.overallPercentage.toFixed(1)}% Used
                 </div>
-                <div className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-bold">
+                <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-bold border border-emerald-200">
                   <PiggyBank size={14} /> Remaining: ${summary.totalRemaining.toLocaleString()}
                 </div>
               </div>
             </div>
             
-            <div className="w-full md:w-1/2 relative h-48 flex items-end justify-between px-4 pb-4 bg-gray-50 rounded-xl">
-              {budgets.slice(0, 7).map((budget, i) => (
-                <div key={budget.id} className="flex flex-col items-center gap-2 flex-1">
-                  <div
-                    className="w-full max-w-[40px] bg-emerald-200 rounded-t-lg transition-all hover:bg-emerald-300 cursor-pointer"
-                    style={{ height: `${Math.min(budget.percentageUsed, 100)}%`, minHeight: '4px' }}
-                    title={`${budget.categoryName}: ${budget.percentageUsed.toFixed(1)}%`}
-                  />
-                  <span className="text-xs text-gray-500 truncate max-w-[50px] text-center">
-                    {budget.categoryName.substring(0, 3)}
-                  </span>
-                </div>
-              ))}
+            <div className="w-full md:w-1/2 relative h-48 flex items-end justify-between px-4 pb-4 bg-emerald-50/30 rounded-xl">
+              {budgets.slice(0, 7).map((budget, i) => {
+                const percentage = budget.percentageUsed;
+                const barColor = getPercentageColor(percentage);
+                const borderColor = getBorderColor(percentage);
+                
+                return (
+                  <div key={budget.id} className="flex flex-col items-center gap-2 flex-1">
+                    <div
+                      className={`w-full max-w-[40px] ${barColor} rounded-t-lg transition-all hover:opacity-80 cursor-pointer shadow-sm ${borderColor} border`}
+                      style={{ height: `${Math.min(percentage, 100)}%`, minHeight: '4px' }}
+                      title={`${budget.categoryName}: ${percentage.toFixed(1)}%`}
+                    />
+                    <span className="text-xs text-gray-600 truncate max-w-[50px] text-center font-medium">
+                      {budget.categoryName.substring(0, 3)}
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      {percentage.toFixed(0)}%
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
